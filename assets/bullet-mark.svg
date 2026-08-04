@@ -1,0 +1,11 @@
+<svg xmlns="http://www.w3.org/2000/svg" viewBox="0 0 640 160" role="img" aria-labelledby="title desc">
+  <title id="title">Bullet event track</title>
+  <desc id="desc">A forward event timeline with nodes and an arrow.</desc>
+  <rect width="640" height="160" rx="28" fill="#081321"/>
+  <path d="M64 84H530" stroke="#8da5ba" stroke-width="8" stroke-linecap="round"/>
+  <path d="M530 84h48m-24-24 24 24-24 24" fill="none" stroke="#36e3a5" stroke-width="8" stroke-linecap="round" stroke-linejoin="round"/>
+  <circle cx="128" cy="84" r="18" fill="#081321" stroke="#36e3a5" stroke-width="8"/>
+  <circle cx="288" cy="84" r="18" fill="#36e3a5"/>
+  <circle cx="448" cy="84" r="18" fill="#081321" stroke="#36e3a5" stroke-width="8"/>
+  <path d="M288 36v24M288 108v16" stroke="#36e3a5" stroke-width="6" stroke-linecap="round"/>
+</svg>

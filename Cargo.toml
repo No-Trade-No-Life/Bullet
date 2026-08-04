@@ -1,0 +1,19 @@
+[workspace]
+members = [
+  "crates/bullet-core",
+  "crates/bullet-events",
+  "crates/bullet-data",
+  "crates/bullet-features",
+  "crates/bullet-strategy",
+  "crates/bullet-execution",
+  "crates/bullet-portfolio",
+  "crates/bullet-backtest",
+  "crates/bullet-ml",
+  "crates/bullet-cli",
+]
+resolver = "3"
+
+[workspace.package]
+edition = "2024"
+license = "Apache-2.0"
+repository = "https://github.com/No-Trade-No-Life/Bullet"
