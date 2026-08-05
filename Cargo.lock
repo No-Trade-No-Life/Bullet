@@ -179,6 +179,7 @@ dependencies = [
  "bullet-backtest",
  "bullet-core",
  "bullet-data",
+ "libc",
  "parquet",
 ]
 

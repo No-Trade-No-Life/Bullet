@@ -25,7 +25,7 @@ The input is one chronologically ordered instrument series with these required, 
 
 | Column | Arrow type | Meaning |
 | --- | --- | --- |
-| `timestamp_ns` | `UInt64` | Strictly increasing bar timestamp in nanoseconds. |
+| `date` | `Timestamp(Nanosecond)` | Strictly increasing bar timestamp. |
 | `open` | `Float64` | Positive, finite next-execution price. |
 | `close` | `Float64` | Positive, finite closing price used for the moving averages. |
 
@@ -43,7 +43,9 @@ The defaults are a 20-bar fast moving average and a 50-bar slow moving average. 
 3. When fast is at or below slow and a position is open, it submits a one-unit sell order.
 4. `bullet-engine` executes that pending order at the **next bar open**.
 
-The report includes number of bars, fills, ending position, realized P&L, and mark-to-market P&L. It intentionally excludes fees, slippage, corporate actions, sizing, borrow, and live-broker behavior.
+The report is Bullet's evaluation record. It includes file bytes, bar count, end-to-end runtime, process peak RSS, fills, completed round trips, ending position, realized P&L, and mark-to-market P&L.
+
+Performance metrics use daily **UTC** close equity, zero risk-free rate, `sqrt(252)` annualization for Sharpe, and a fully funded one-unit initial equity equal to the first close. The report also includes cumulative return, CAGR, annualized Sharpe, maximum drawdown, and CAGR / absolute maximum drawdown. `n/a` means the supplied date range has insufficient observations or no drawdown. It intentionally excludes fees, slippage, contract multiplier, futures margin, corporate actions, sizing, borrow, and live-broker behavior.
 
 ## Development
 

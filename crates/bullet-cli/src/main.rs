@@ -1,7 +1,8 @@
 use std::error::Error;
 use std::path::PathBuf;
+use std::time::Instant;
 
-use bullet_backtest::{DualMovingAverage, run_dual_moving_average};
+use bullet_backtest::{DualMovingAverage, Performance, run_dual_moving_average};
 use bullet_core::Quantity;
 use bullet_data::read_bars;
 
@@ -14,17 +15,68 @@ fn main() {
 
 fn run() -> Result<(), Box<dyn Error>> {
     let arguments = Arguments::parse(std::env::args().skip(1))?;
-    let bars = read_bars(arguments.path)?;
+    let data_size_bytes = std::fs::metadata(&arguments.path)?.len();
+    let started_at = Instant::now();
+    let bars = read_bars(&arguments.path)?;
     let strategy = DualMovingAverage::new(arguments.fast_window, arguments.slow_window)?;
     let quantity = Quantity::new(1).expect("constant quantity is non-zero");
     let result = run_dual_moving_average(&bars, strategy, quantity)?;
+    let elapsed = started_at.elapsed();
 
     println!("bars: {}", result.bars);
+    println!("data_size_bytes: {data_size_bytes}");
+    println!("runtime_ms: {}", elapsed.as_millis());
+    println!("peak_rss_bytes: {}", peak_rss_bytes());
     println!("fills: {}", result.fills);
+    println!("round_trips: {}", result.round_trips);
     println!("ending_position: {}", result.ending_position);
     println!("realized_pnl: {:.6}", result.realized_pnl);
     println!("mark_to_market_pnl: {:.6}", result.mark_to_market_pnl);
+    print_performance(&result.performance);
     Ok(())
+}
+
+fn print_performance(performance: &Performance) {
+    println!("initial_equity: {:.6}", performance.initial_equity);
+    println!("final_equity: {:.6}", performance.final_equity);
+    println!("cumulative_return: {:.6}", performance.cumulative_return);
+    print_optional("annualized_return", performance.annualized_return);
+    print_optional("annualized_sharpe", performance.annualized_sharpe);
+    println!("max_drawdown: {:.6}", performance.max_drawdown);
+    print_optional("return_drawdown_ratio", performance.return_drawdown_ratio);
+    println!("daily_observations: {}", performance.daily_observations);
+}
+
+fn print_optional(label: &str, value: Option<f64>) {
+    match value {
+        Some(value) => println!("{label}: {value:.6}"),
+        None => println!("{label}: n/a"),
+    }
+}
+
+#[cfg(unix)]
+fn peak_rss_bytes() -> u64 {
+    let mut usage = std::mem::MaybeUninit::<libc::rusage>::zeroed();
+    // SAFETY: `usage` points to valid writable storage, and `RUSAGE_SELF` queries this process.
+    let status = unsafe { libc::getrusage(libc::RUSAGE_SELF, usage.as_mut_ptr()) };
+    if status != 0 {
+        return 0;
+    }
+    let maximum_rss = unsafe { usage.assume_init() }.ru_maxrss as u64;
+
+    #[cfg(target_os = "macos")]
+    {
+        maximum_rss
+    }
+    #[cfg(not(target_os = "macos"))]
+    {
+        maximum_rss * 1024
+    }
+}
+
+#[cfg(not(unix))]
+fn peak_rss_bytes() -> u64 {
+    0
 }
 
 struct Arguments {
