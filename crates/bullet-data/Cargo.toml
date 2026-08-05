@@ -1,16 +1,13 @@
 [package]
-name = "bullet-cli"
+name = "bullet-data"
 version = "0.1.0"
 edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
 [dependencies]
-bullet-backtest = { path = "../bullet-backtest" }
-bullet-core = { path = "../bullet-core" }
-bullet-data = { path = "../bullet-data" }
-
-[dev-dependencies]
 arrow-array = "59.1.0"
 arrow-schema = "59.1.0"
 parquet = { version = "59.1.0", features = ["arrow"] }
+bullet-core = { path = "../bullet-core" }
+

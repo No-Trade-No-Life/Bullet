@@ -2,6 +2,8 @@
 members = [
   "crates/bullet-core",
   "crates/bullet-engine",
+  "crates/bullet-data",
+  "crates/bullet-backtest",
   "crates/bullet-cli",
 ]
 resolver = "3"
