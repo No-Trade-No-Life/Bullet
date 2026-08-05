@@ -1,0 +1,185 @@
+//! Deterministic in-memory dispatch and order-state reduction.
+
+use std::collections::BTreeMap;
+use std::error::Error;
+use std::fmt;
+
+use bullet_core::{Event, EventEnvelope, Fill, Order, OrderId, Sequence};
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct EventDispatcher {
+    events: Vec<EventEnvelope<Event>>,
+}
+
+impl EventDispatcher {
+    pub fn next_sequence(&self) -> Sequence {
+        self.events.len() as Sequence + 1
+    }
+
+    pub fn envelope(&self, timestamp_ns: u64, payload: Event) -> EventEnvelope<Event> {
+        EventEnvelope::new(self.next_sequence(), timestamp_ns, payload)
+    }
+
+    pub fn record(&mut self, event: EventEnvelope<Event>) {
+        self.events.push(event);
+    }
+
+    pub fn events(&self) -> &[EventEnvelope<Event>] {
+        &self.events
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum OrderState {
+    Pending(Order),
+    Filled { order: Order, fill: Fill },
+}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct OrderBook {
+    orders: BTreeMap<OrderId, OrderState>,
+}
+
+impl OrderBook {
+    pub fn apply(&mut self, event: &EventEnvelope<Event>) -> Result<(), ReducerError> {
+        match &event.payload {
+            Event::MarketTick(_) => Ok(()),
+            Event::OrderSubmitted(order) => self.insert_order(order.clone()),
+            Event::OrderFilled(fill) => self.fill_order(fill.clone()),
+        }
+    }
+
+    pub fn state(&self, order_id: OrderId) -> Option<&OrderState> {
+        self.orders.get(&order_id)
+    }
+
+    fn insert_order(&mut self, order: Order) -> Result<(), ReducerError> {
+        if self.orders.contains_key(&order.id) {
+            return Err(ReducerError::DuplicateOrder(order.id));
+        }
+
+        self.orders.insert(order.id, OrderState::Pending(order));
+        Ok(())
+    }
+
+    fn fill_order(&mut self, fill: Fill) -> Result<(), ReducerError> {
+        let state = self
+            .orders
+            .get_mut(&fill.order_id)
+            .ok_or(ReducerError::UnknownOrder(fill.order_id))?;
+        let OrderState::Pending(order) = state else {
+            return Err(ReducerError::OrderAlreadyFilled(fill.order_id));
+        };
+        *state = OrderState::Filled {
+            order: order.clone(),
+            fill,
+        };
+        Ok(())
+    }
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum ReducerError {
+    DuplicateOrder(OrderId),
+    UnknownOrder(OrderId),
+    OrderAlreadyFilled(OrderId),
+}
+
+impl fmt::Display for ReducerError {
+    fn fmt(&self, formatter: &mut fmt::Formatter<'_>) -> fmt::Result {
+        match self {
+            Self::DuplicateOrder(order_id) => write!(formatter, "order {order_id} already exists"),
+            Self::UnknownOrder(order_id) => write!(formatter, "order {order_id} does not exist"),
+            Self::OrderAlreadyFilled(order_id) => {
+                write!(formatter, "order {order_id} is already filled")
+            }
+        }
+    }
+}
+
+impl Error for ReducerError {}
+
+#[derive(Clone, Debug, Default, Eq, PartialEq)]
+pub struct Engine {
+    dispatcher: EventDispatcher,
+    orders: OrderBook,
+}
+
+impl Engine {
+    pub fn dispatch_at(
+        &mut self,
+        timestamp_ns: u64,
+        payload: Event,
+    ) -> Result<EventEnvelope<Event>, ReducerError> {
+        let event = self.dispatcher.envelope(timestamp_ns, payload);
+        self.orders.apply(&event)?;
+        self.dispatcher.record(event.clone());
+        Ok(event)
+    }
+
+    pub fn events(&self) -> &[EventEnvelope<Event>] {
+        self.dispatcher.events()
+    }
+
+    pub fn order_state(&self, order_id: OrderId) -> Option<&OrderState> {
+        self.orders.state(order_id)
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use bullet_core::{Event, Fill, Instrument, Order, Price, Quantity, Side};
+
+    use super::{Engine, OrderState, ReducerError};
+
+    fn order() -> Order {
+        Order::new(
+            1,
+            Instrument::new("AAPL").expect("a symbol is non-empty"),
+            Side::Buy,
+            Quantity::new(5).expect("quantity is non-zero"),
+        )
+    }
+
+    #[test]
+    fn engine_assigns_sequence_and_reduces_an_order_to_filled() {
+        let mut engine = Engine::default();
+        let submitted = engine
+            .dispatch_at(10, Event::OrderSubmitted(order()))
+            .expect("new order is accepted");
+        let filled = engine
+            .dispatch_at(
+                20,
+                Event::OrderFilled(Fill {
+                    order_id: 1,
+                    price: Price::new(189).expect("price is non-zero"),
+                }),
+            )
+            .expect("pending order can fill");
+
+        assert_eq!(submitted.sequence, 1);
+        assert_eq!(filled.sequence, 2);
+        assert_eq!(engine.events().len(), 2);
+        assert!(matches!(
+            engine.order_state(1),
+            Some(OrderState::Filled { fill, .. }) if fill.price.value() == 189
+        ));
+    }
+
+    #[test]
+    fn reducer_rejects_an_unknown_fill_without_recording_it() {
+        let mut engine = Engine::default();
+        let error = engine
+            .dispatch_at(
+                10,
+                Event::OrderFilled(Fill {
+                    order_id: 99,
+                    price: Price::new(189).expect("price is non-zero"),
+                }),
+            )
+            .expect_err("unknown order cannot fill");
+
+        assert_eq!(error, ReducerError::UnknownOrder(99));
+        assert!(engine.events().is_empty());
+    }
+}
