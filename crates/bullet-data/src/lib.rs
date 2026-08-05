@@ -5,12 +5,12 @@ use std::fmt;
 use std::fs::File;
 use std::path::Path;
 
-use arrow_array::{Array, Float64Array, RecordBatch, UInt64Array};
+use arrow_array::{Array, Float64Array, RecordBatch, TimestampNanosecondArray};
 use arrow_schema::ArrowError;
 use bullet_core::{Bar, Price};
 use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
-const TIMESTAMP_COLUMN: &str = "timestamp_ns";
+const DATE_COLUMN: &str = "date";
 const OPEN_COLUMN: &str = "open";
 const CLOSE_COLUMN: &str = "close";
 
@@ -23,8 +23,7 @@ pub fn read_bars(path: impl AsRef<Path>) -> Result<Vec<Bar>, DataError> {
     let mut bars = Vec::new();
 
     for batch in reader {
-        let batch = batch.map_err(DataError::Arrow)?;
-        append_batch(&mut bars, &batch)?;
+        append_batch(&mut bars, &batch.map_err(DataError::Arrow)?)?;
     }
 
     validate_timestamps(&bars)?;
@@ -32,12 +31,12 @@ pub fn read_bars(path: impl AsRef<Path>) -> Result<Vec<Bar>, DataError> {
 }
 
 fn append_batch(bars: &mut Vec<Bar>, batch: &RecordBatch) -> Result<(), DataError> {
-    let timestamps = required_u64_column(batch, TIMESTAMP_COLUMN)?;
+    let dates = required_date_column(batch)?;
     let opens = required_f64_column(batch, OPEN_COLUMN)?;
     let closes = required_f64_column(batch, CLOSE_COLUMN)?;
 
     for row in 0..batch.num_rows() {
-        let timestamp_ns = required_value(timestamps, row, TIMESTAMP_COLUMN)?;
+        let timestamp_ns = timestamp_ns(required_value(dates, row, DATE_COLUMN)?, row)?;
         let open = price(required_value(opens, row, OPEN_COLUMN)?, row, OPEN_COLUMN)?;
         let close = price(
             required_value(closes, row, CLOSE_COLUMN)?,
@@ -50,16 +49,13 @@ fn append_batch(bars: &mut Vec<Bar>, batch: &RecordBatch) -> Result<(), DataErro
     Ok(())
 }
 
-fn required_u64_column<'a>(
-    batch: &'a RecordBatch,
-    name: &'static str,
-) -> Result<&'a UInt64Array, DataError> {
+fn required_date_column(batch: &RecordBatch) -> Result<&TimestampNanosecondArray, DataError> {
     batch
-        .column_by_name(name)
-        .ok_or(DataError::MissingColumn(name))?
+        .column_by_name(DATE_COLUMN)
+        .ok_or(DataError::MissingColumn(DATE_COLUMN))?
         .as_any()
-        .downcast_ref::<UInt64Array>()
-        .ok_or(DataError::InvalidColumnType(name))
+        .downcast_ref::<TimestampNanosecondArray>()
+        .ok_or(DataError::InvalidColumnType(DATE_COLUMN))
 }
 
 fn required_f64_column<'a>(
@@ -88,9 +84,9 @@ trait ArrayValue<T>: Array {
     fn value(&self, row: usize) -> T;
 }
 
-impl ArrayValue<u64> for UInt64Array {
-    fn value(&self, row: usize) -> u64 {
-        UInt64Array::value(self, row)
+impl ArrayValue<i64> for TimestampNanosecondArray {
+    fn value(&self, row: usize) -> i64 {
+        TimestampNanosecondArray::value(self, row)
     }
 }
 
@@ -98,6 +94,10 @@ impl ArrayValue<f64> for Float64Array {
     fn value(&self, row: usize) -> f64 {
         Float64Array::value(self, row)
     }
+}
+
+fn timestamp_ns(value: i64, row: usize) -> Result<u64, DataError> {
+    u64::try_from(value).map_err(|_| DataError::InvalidTimestamp { row, value })
 }
 
 fn price(value: f64, row: usize, column: &'static str) -> Result<Price, DataError> {
@@ -125,6 +125,10 @@ pub enum DataError {
         column: &'static str,
         row: usize,
     },
+    InvalidTimestamp {
+        row: usize,
+        value: i64,
+    },
     InvalidPrice {
         column: &'static str,
         row: usize,
@@ -148,6 +152,9 @@ impl fmt::Display for DataError {
             Self::NullValue { column, row } => {
                 write!(formatter, "column `{column}` is null at row {row}")
             }
+            Self::InvalidTimestamp { row, value } => {
+                write!(formatter, "date has invalid timestamp {value} at row {row}")
+            }
             Self::InvalidPrice { column, row, value } => {
                 write!(
                     formatter,
@@ -157,7 +164,7 @@ impl fmt::Display for DataError {
             Self::NonIncreasingTimestamp { row } => {
                 write!(
                     formatter,
-                    "timestamp_ns must strictly increase; row {row} is out of order"
+                    "date must strictly increase; row {row} is out of order"
                 )
             }
         }
@@ -173,6 +180,7 @@ impl Error for DataError {
             Self::MissingColumn(_)
             | Self::InvalidColumnType(_)
             | Self::NullValue { .. }
+            | Self::InvalidTimestamp { .. }
             | Self::InvalidPrice { .. }
             | Self::NonIncreasingTimestamp { .. } => None,
         }
@@ -184,25 +192,35 @@ mod tests {
     use std::fs::File;
     use std::sync::Arc;
 
-    use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt64Array};
+    use arrow_array::{ArrayRef, Float64Array, RecordBatch, TimestampNanosecondArray};
     use arrow_schema::{DataType, Field, Schema};
     use parquet::arrow::ArrowWriter;
 
     use super::read_bars;
 
     #[test]
-    fn reads_required_bar_columns_from_parquet() {
-        let path =
-            std::env::temp_dir().join(format!("bullet-data-{}-{}.parquet", std::process::id(), 1));
+    fn reads_date_timestamp_ohlc_columns_from_parquet() {
+        let path = std::env::temp_dir().join(format!(
+            "bullet-data-{}-{}.parquet",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos()
+        ));
         let schema = Arc::new(Schema::new(vec![
-            Field::new("timestamp_ns", DataType::UInt64, false),
+            Field::new(
+                "date",
+                DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+                false,
+            ),
             Field::new("open", DataType::Float64, false),
             Field::new("close", DataType::Float64, false),
         ]));
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(UInt64Array::from(vec![1_u64, 2])) as ArrayRef,
+                Arc::new(TimestampNanosecondArray::from(vec![1_i64, 2])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![100.0, 101.0])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![101.0, 102.0])) as ArrayRef,
             ],

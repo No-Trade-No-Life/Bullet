@@ -9,6 +9,7 @@ repository.workspace = true
 bullet-backtest = { path = "../bullet-backtest" }
 bullet-core = { path = "../bullet-core" }
 bullet-data = { path = "../bullet-data" }
+libc = "0.2.189"
 
 [dev-dependencies]
 arrow-array = "59.1.0"

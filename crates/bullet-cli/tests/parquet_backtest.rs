@@ -2,7 +2,7 @@ use std::fs::File;
 use std::process::Command;
 use std::sync::Arc;
 
-use arrow_array::{ArrayRef, Float64Array, RecordBatch, UInt64Array};
+use arrow_array::{ArrayRef, Float64Array, RecordBatch, TimestampNanosecondArray};
 use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::ArrowWriter;
 
@@ -17,14 +17,24 @@ fn cli_runs_dual_moving_average_on_parquet_input() {
             .as_nanos()
     ));
     let schema = Arc::new(Schema::new(vec![
-        Field::new("timestamp_ns", DataType::UInt64, false),
+        Field::new(
+            "date",
+            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+            false,
+        ),
         Field::new("open", DataType::Float64, false),
         Field::new("close", DataType::Float64, false),
     ]));
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(UInt64Array::from(vec![1_u64, 2, 3, 4, 5])) as ArrayRef,
+            Arc::new(TimestampNanosecondArray::from(vec![
+                86_400_000_000_000_i64,
+                172_800_000_000_000,
+                259_200_000_000_000,
+                345_600_000_000_000,
+                432_000_000_000_000,
+            ])) as ArrayRef,
             Arc::new(Float64Array::from(vec![10.0, 11.0, 12.0, 10.0, 13.0])) as ArrayRef,
             Arc::new(Float64Array::from(vec![10.0, 11.0, 12.0, 10.0, 9.0])) as ArrayRef,
         ],
@@ -46,7 +56,12 @@ fn cli_runs_dual_moving_average_on_parquet_input() {
     assert!(output.status.success());
     let stdout = String::from_utf8(output.stdout).expect("CLI output is UTF-8");
     assert!(stdout.contains("bars: 5"));
+    assert!(stdout.contains("data_size_bytes: "));
+    assert!(stdout.contains("runtime_ms: "));
+    assert!(stdout.contains("peak_rss_bytes: "));
     assert!(stdout.contains("fills: 2"));
     assert!(stdout.contains("ending_position: 0"));
     assert!(stdout.contains("realized_pnl: 3.000000"));
+    assert!(stdout.contains("cumulative_return: 0.300000"));
+    assert!(stdout.contains("max_drawdown: 0.000000"));
 }
