@@ -1,15 +1,22 @@
-use bullet_execution::{Order, Side, fill_at_next_open};
+use bullet_core::{Event, Fill, Instrument, Order, Price, Quantity, Side};
+use bullet_engine::Engine;
 
 fn main() {
-    let order = Order {
-        id: 1,
-        created_sequence: 0,
-        side: Side::Buy,
-        quantity: 1,
-    };
-    let fill = fill_at_next_open(order, 1, 100).expect("the next open is causally eligible");
+    let instrument = Instrument::new("AAPL").expect("demo symbol is non-empty");
+    let quantity = Quantity::new(10).expect("demo quantity is non-zero");
+    let price = Price::new(189).expect("demo price is non-zero");
+    let order = Order::new(1, instrument, Side::Buy, quantity);
+    let mut engine = Engine::default();
+
+    let submitted = engine
+        .dispatch_at(1, Event::OrderSubmitted(order))
+        .expect("a new demo order is accepted");
+    let filled = engine
+        .dispatch_at(2, Event::OrderFilled(Fill { order_id: 1, price }))
+        .expect("the pending demo order fills");
+
     println!(
-        "Bullet ready: order {} fills at sequence {}.",
-        fill.order_id, fill.sequence
+        "order 1: submitted at sequence {}, filled at sequence {}",
+        submitted.sequence, filled.sequence
     );
 }

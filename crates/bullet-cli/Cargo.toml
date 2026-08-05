@@ -6,4 +6,5 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
-bullet-execution = { path = "../bullet-execution" }
+bullet-core = { path = "../bullet-core" }
+bullet-engine = { path = "../bullet-engine" }

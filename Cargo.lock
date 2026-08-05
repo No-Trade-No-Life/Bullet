@@ -3,18 +3,11 @@
 version = 4
 
 [[package]]
-name = "bullet-backtest"
-version = "0.1.0"
-dependencies = [
- "bullet-execution",
- "bullet-portfolio",
-]
-
-[[package]]
 name = "bullet-cli"
 version = "0.1.0"
 dependencies = [
- "bullet-execution",
+ "bullet-core",
+ "bullet-engine",
 ]
 
 [[package]]
@@ -22,46 +15,7 @@ name = "bullet-core"
 version = "0.1.0"
 
 [[package]]
-name = "bullet-data"
-version = "0.1.0"
-dependencies = [
- "bullet-core",
-]
-
-[[package]]
-name = "bullet-events"
-version = "0.1.0"
-dependencies = [
- "bullet-core",
-]
-
-[[package]]
-name = "bullet-execution"
-version = "0.1.0"
-dependencies = [
- "bullet-core",
-]
-
-[[package]]
-name = "bullet-features"
-version = "0.1.0"
-dependencies = [
- "bullet-core",
-]
-
-[[package]]
-name = "bullet-ml"
-version = "0.1.0"
-
-[[package]]
-name = "bullet-portfolio"
-version = "0.1.0"
-dependencies = [
- "bullet-execution",
-]
-
-[[package]]
-name = "bullet-strategy"
+name = "bullet-engine"
 version = "0.1.0"
 dependencies = [
  "bullet-core",

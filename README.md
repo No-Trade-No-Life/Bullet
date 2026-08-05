@@ -1,35 +1,30 @@
 # Bullet
 
-![Bullet event-track mark](assets/bullet-mark.svg)
+Bullet is an event-driven Rust foundation for quantitative trading research and execution.
 
-**Bullet** is an event-driven Rust workspace for quantitative research, backtesting, and execution.
+## Architecture
 
-## Core invariant
+```text
+bullet-cli
+    |
+    +--> bullet-engine  -- deterministic dispatch and order-state reduction
+    |
+    +--> bullet-core    -- market, order, and event-envelope domain types
+```
 
-Market events are accepted in one causal sequence. A strategy can observe event `N` and create an order, but that order can only fill at the open of a **later eligible event**. It must never be filled retroactively on event `N` or at a price that was not available after the decision.
-
-This is intentionally encoded at the execution boundary: `fill_at_next_open` rejects an open whose sequence is not strictly greater than the order's creation sequence.
-
-## Workspace
-
-| Crate | Responsibility |
-| --- | --- |
-| `bullet-core` | Shared event and market primitives |
-| `bullet-events` | Causal event-log validation |
-| `bullet-data` | Validated OHLCV bars |
-| `bullet-features` | Deterministic feature calculations |
-| `bullet-strategy` | Signal generation |
-| `bullet-execution` | Order and next-open fill semantics |
-| `bullet-portfolio` | Position accounting |
-| `bullet-backtest` | Backtest wiring and records |
-| `bullet-ml` | Feature-vector boundary for ML workflows |
-| `bullet-cli` | Minimal command-line entry point |
+- **`bullet-core`** defines validated instruments, prices, quantities, orders, market ticks, fills, and sequenced event envelopes.
+- **`bullet-engine`** assigns event sequences in memory and applies submitted-order and filled-order transitions deterministically.
+- **`bullet-cli`** publishes a submitted order followed by a fill, then prints the resulting event sequence.
 
 ## Development
 
 ```bash
 cargo fmt --check
-cargo clippy --workspace --all-targets -- -D warnings
 cargo test --workspace
+cargo clippy --workspace --all-targets -- -D warnings
 cargo run -p bullet-cli
 ```
+
+## Initial scope
+
+This initial workspace is deliberately limited to in-memory, deterministic event flow and order lifecycle reduction. It has no market-data adapters, strategy runtime, persistence, networking, broker integration, portfolio accounting, backtesting, or live-trading behavior.

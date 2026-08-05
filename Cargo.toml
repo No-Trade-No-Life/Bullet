@@ -1,14 +1,7 @@
 [workspace]
 members = [
   "crates/bullet-core",
-  "crates/bullet-events",
-  "crates/bullet-data",
-  "crates/bullet-features",
-  "crates/bullet-strategy",
-  "crates/bullet-execution",
-  "crates/bullet-portfolio",
-  "crates/bullet-backtest",
-  "crates/bullet-ml",
+  "crates/bullet-engine",
   "crates/bullet-cli",
 ]
 resolver = "3"
