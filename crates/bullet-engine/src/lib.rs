@@ -6,7 +6,7 @@ use std::fmt;
 
 use bullet_core::{Event, EventEnvelope, Fill, Instrument, MarketTick, Order, OrderId, Sequence};
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct EventDispatcher {
     events: Vec<EventEnvelope<Event>>,
 }
@@ -29,13 +29,13 @@ impl EventDispatcher {
     }
 }
 
-#[derive(Clone, Debug, Eq, PartialEq)]
+#[derive(Clone, Debug, PartialEq)]
 pub enum OrderState {
     Pending(Order),
     Filled { order: Order, fill: Fill },
 }
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct OrderBook {
     orders: BTreeMap<OrderId, OrderState>,
 }
@@ -111,7 +111,7 @@ impl fmt::Display for ReducerError {
 
 impl Error for ReducerError {}
 
-#[derive(Clone, Debug, Default, Eq, PartialEq)]
+#[derive(Clone, Debug, Default, PartialEq)]
 pub struct Engine {
     dispatcher: EventDispatcher,
     orders: OrderBook,
@@ -183,10 +183,10 @@ mod tests {
         )
     }
 
-    fn tick(symbol: &str, price: u64) -> MarketTick {
+    fn tick(symbol: &str, price: f64) -> MarketTick {
         MarketTick {
             instrument: instrument(symbol),
-            price: Price::new(price).expect("price is non-zero"),
+            price: Price::new(price).expect("price is positive and finite"),
         }
     }
 
@@ -201,7 +201,7 @@ mod tests {
                 20,
                 Event::OrderFilled(Fill {
                     order_id: 1,
-                    price: Price::new(189).expect("price is non-zero"),
+                    price: Price::new(189.5).expect("price is positive and finite"),
                 }),
             )
             .expect("pending order can fill");
@@ -211,7 +211,7 @@ mod tests {
         assert_eq!(engine.events().len(), 2);
         assert!(matches!(
             engine.order_state(1),
-            Some(OrderState::Filled { fill, .. }) if fill.price.value() == 189
+            Some(OrderState::Filled { fill, .. }) if fill.price.value() == 189.5
         ));
     }
 
@@ -226,23 +226,23 @@ mod tests {
             .expect("new order is accepted");
 
         let generated = engine
-            .execute_market_tick_at(20, tick("AAPL", 189))
+            .execute_market_tick_at(20, tick("AAPL", 189.5))
             .expect("a valid tick executes matching pending orders");
 
         assert_eq!(generated.len(), 2);
         assert_eq!(generated[0].sequence, 3);
-        assert_eq!(generated[0].payload, Event::MarketTick(tick("AAPL", 189)));
+        assert_eq!(generated[0].payload, Event::MarketTick(tick("AAPL", 189.5)));
         assert_eq!(generated[1].sequence, 4);
         assert_eq!(
             generated[1].payload,
             Event::OrderFilled(Fill {
                 order_id: 1,
-                price: Price::new(189).expect("price is non-zero"),
+                price: Price::new(189.5).expect("price is positive and finite"),
             })
         );
         assert!(matches!(
             engine.order_state(1),
-            Some(OrderState::Filled { fill, .. }) if fill.price.value() == 189
+            Some(OrderState::Filled { fill, .. }) if fill.price.value() == 189.5
         ));
         assert!(matches!(
             engine.order_state(2),
@@ -258,7 +258,7 @@ mod tests {
                 10,
                 Event::OrderFilled(Fill {
                     order_id: 99,
-                    price: Price::new(189).expect("price is non-zero"),
+                    price: Price::new(189.5).expect("price is positive and finite"),
                 }),
             )
             .expect_err("unknown order cannot fill");
