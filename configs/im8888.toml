@@ -1,0 +1,22 @@
+version = 1
+
+[backtest]
+mode = "bar"
+initial_cash = 1000000.0
+currency = "CNY"
+
+[execution]
+fill_price = "next_bar_open"
+slippage_bps = 0.0
+
+[fees]
+mode = "per_contract"
+open = 0.0
+close = 0.0
+
+[[instruments]]
+id = "IM8888"
+data = "~/.quant-data/IM8888.parquet"
+multiplier = 200.0
+margin_rate = 0.12
+tick_size = 0.2
