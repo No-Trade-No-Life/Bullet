@@ -7,19 +7,39 @@ use arrow_schema::{DataType, Field, Schema};
 use parquet::arrow::ArrowWriter;
 
 #[test]
-fn cli_compiles_and_runs_a_strategy_source_with_toml_config() {
+fn cli_runs_a_dual_moving_average_through_long_and_short_round_trips() {
     let root = std::env::temp_dir().join(format!("bullet-cli-{}", std::process::id()));
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("temporary directory is writable");
     let parquet = root.join("bars.parquet");
     write_bars(&parquet);
     let strategy = root.join("strategy.rs");
-    fs::write(&strategy, r#"
+    fs::write(
+        &strategy,
+        r#"
 use bullet::{BarContext, Order, Strategy};
-pub struct BuyOnce;
-pub fn strategy() -> BuyOnce { BuyOnce }
-impl Strategy for BuyOnce { fn on_bar(&mut self, context: BarContext<'_>) -> Order { if context.position == 0 { Order::Buy(1) } else { Order::Close } } }
-"#).expect("strategy source is writable");
+pub struct DualMovingAverage { closes: Vec<f64> }
+pub fn strategy() -> DualMovingAverage { DualMovingAverage { closes: Vec::new() } }
+impl Strategy for DualMovingAverage {
+    fn on_bar(&mut self, context: BarContext<'_>) -> Order {
+        self.closes.push(context.bar.close.value());
+        if self.closes.len() < 3 { return Order::None; }
+        let fast = (&self.closes[self.closes.len() - 2..]).iter().sum::<f64>() / 2.0;
+        let slow = (&self.closes[self.closes.len() - 3..]).iter().sum::<f64>() / 3.0;
+        if fast > slow {
+            if context.position < 0 { Order::Close }
+            else if context.position == 0 { Order::Buy(1) }
+            else { Order::None }
+        } else if fast < slow {
+            if context.position > 0 { Order::Close }
+            else if context.position == 0 { Order::Sell(1) }
+            else { Order::None }
+        } else { Order::None }
+    }
+}
+"#,
+    )
+    .expect("strategy source is writable");
     let config = root.join("backtest.toml");
     fs::write(
         &config,
@@ -36,7 +56,7 @@ slippage_bps = 0.0
 [fees]
 mode = "per_contract"
 open = 1.0
-close = 1.0
+close = 2.0
 [[instruments]]
 id = "TEST"
 data = "{}"
@@ -67,10 +87,12 @@ tick_size = 0.1
     );
     let stdout = String::from_utf8(output.stdout).expect("CLI output is UTF-8");
     assert!(stdout.contains("strategy_binary: "));
-    assert!(stdout.contains("bars: 5"));
+    assert!(stdout.contains("bars: 9"));
     assert!(stdout.contains("fills: 4"));
-    assert!(stdout.contains("fees_paid: 4.000000"));
+    assert!(stdout.contains("round_trips: 2"));
+    assert!(stdout.contains("fees_paid: 6.000000"));
     assert!(stdout.contains("ending_position.TEST: 0"));
+    assert!(stdout.contains("final_equity: 90.000000"));
 }
 
 fn write_bars(path: &std::path::Path) {
@@ -92,9 +114,17 @@ fn write_bars(path: &std::path::Path) {
                 259_200_000_000_000,
                 345_600_000_000_000,
                 432_000_000_000_000,
+                518_400_000_000_000,
+                604_800_000_000_000,
+                691_200_000_000_000,
+                777_600_000_000_000,
             ])) as ArrayRef,
-            Arc::new(Float64Array::from(vec![10.0, 11.0, 12.0, 13.0, 14.0])) as ArrayRef,
-            Arc::new(Float64Array::from(vec![10.0, 11.0, 12.0, 13.0, 14.0])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![
+                10.0, 11.0, 12.0, 11.0, 10.0, 9.0, 10.0, 11.0, 12.0,
+            ])) as ArrayRef,
+            Arc::new(Float64Array::from(vec![
+                10.0, 11.0, 12.0, 11.0, 10.0, 9.0, 10.0, 11.0, 12.0,
+            ])) as ArrayRef,
         ],
     )
     .expect("valid batch");
