@@ -356,10 +356,7 @@ impl State {
         };
         let notional = price * order.quantity as f64 * instrument.multiplier;
         if next_position.unsigned_abs() > position.unsigned_abs() {
-            let required_margin = next_position.unsigned_abs() as f64
-                * price
-                * instrument.multiplier
-                * instrument.margin_rate;
+            let required_margin = self.initial_margin(symbol, next_position, price, instruments);
             let equity = self.equity(instruments);
             if required_margin > equity {
                 return Err(BacktestError::InsufficientMargin {
@@ -391,6 +388,30 @@ impl State {
         self.slippage_paid += adjustment * order.quantity as f64 * instrument.multiplier;
         Ok(())
     }
+    fn initial_margin(
+        &self,
+        changed_symbol: &str,
+        changed_position: i64,
+        changed_price: f64,
+        instruments: &BTreeMap<&str, &InstrumentConfig>,
+    ) -> f64 {
+        self.positions
+            .iter()
+            .map(|(symbol, position)| {
+                let (position, price) = if symbol == changed_symbol {
+                    (changed_position, changed_price)
+                } else {
+                    (*position, self.latest_closes[symbol])
+                };
+                let instrument = instruments[symbol.as_str()];
+                position.unsigned_abs() as f64
+                    * price
+                    * instrument.multiplier
+                    * instrument.margin_rate
+            })
+            .sum()
+    }
+
     fn equity(&self, instruments: &BTreeMap<&str, &InstrumentConfig>) -> f64 {
         self.positions
             .iter()
@@ -504,7 +525,7 @@ impl fmt::Display for BacktestError {
                 equity,
             } => write!(
                 f,
-                "cannot open {instrument}; required margin {required:.6} exceeds equity {equity:.6}"
+                "cannot increase {instrument}; portfolio initial margin {required:.6} exceeds equity {equity:.6}"
             ),
         }
     }
@@ -547,13 +568,13 @@ mod tests {
                 open: 0.0,
                 close: 0.0,
             },
-            instruments: vec![instrument()],
+            instruments: vec![instrument("TEST")],
         }
     }
 
-    fn instrument() -> InstrumentConfig {
+    fn instrument(id: &str) -> InstrumentConfig {
         InstrumentConfig {
-            id: "TEST".to_owned(),
+            id: id.to_owned(),
             data: PathBuf::new(),
             multiplier: 1.0,
             margin_rate: 0.1,
@@ -567,6 +588,38 @@ mod tests {
             .iter()
             .map(|instrument| (instrument.id.as_str(), instrument))
             .collect()
+    }
+
+    #[test]
+    fn rejects_an_order_when_total_portfolio_initial_margin_exceeds_equity() {
+        let mut config = config();
+        config.instruments = vec![instrument("A"), instrument("B")];
+        for instrument in &mut config.instruments {
+            instrument.margin_rate = 0.5;
+        }
+        let instruments = instruments(&config);
+        let mut state = State::new(config.backtest.initial_cash, &config.instruments);
+        state.cash = 0.0;
+        state.positions.insert("A".to_owned(), 1);
+        state.latest_closes.insert("A".to_owned(), 100.0);
+        state
+            .submit("B", Order::Buy(1))
+            .expect("the order is pending until its next-bar fill");
+
+        let error = state
+            .fill_pending("B", 150.0, instruments["B"], &instruments, &config)
+            .expect_err("combined initial margin exceeds the account equity");
+
+        assert!(matches!(
+            error,
+            BacktestError::InsufficientMargin {
+                instrument,
+                required,
+                equity,
+            } if instrument == "B" && required == 125.0 && equity == 100.0
+        ));
+        assert_eq!(state.positions["A"], 1);
+        assert_eq!(state.positions["B"], 0);
     }
 
     #[test]

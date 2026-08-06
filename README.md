@@ -68,7 +68,7 @@ tick_size = 0.2
 
 Add another `[[instruments]]` table for every data file. Bullet merges bars deterministically by timestamp then instrument ID and invokes the strategy once per bar. Relative data paths are resolved from the configuration file; `~` resolves to the current user home directory.
 
-Version 1 accepts only `mode = "bar"`, `fill_price = "next_bar_open"`, and `fees.mode = "per_contract"`. An order that increases the absolute position is rejected if its resulting per-instrument initial-margin requirement exceeds current account equity. Open and close fees apply by the exposure that each fill opens or closes. This makes unsupported tick, same-bar, or custom-fee behavior impossible rather than silently applying a different model.
+Version 1 accepts only `mode = "bar"`, `fill_price = "next_bar_open"`, and `fees.mode = "per_contract"`. An order that increases absolute exposure is rejected if the resulting portfolio initial-margin requirement exceeds current account equity. Existing positions use their latest close; the filling instrument uses its fill price. Open and close fees apply by the exposure that each fill opens or closes. This makes unsupported tick, same-bar, or custom-fee behavior impossible rather than silently applying a different model.
 
 ## Evaluation output
 
