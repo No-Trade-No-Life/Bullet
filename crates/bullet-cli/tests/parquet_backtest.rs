@@ -12,7 +12,10 @@ fn cli_runs_a_dual_moving_average_through_long_and_short_round_trips() {
     let _ = fs::remove_dir_all(&root);
     fs::create_dir_all(&root).expect("temporary directory is writable");
     let parquet = root.join("bars.parquet");
-    write_bars(&parquet);
+    write_bars(
+        &parquet,
+        &[10.0, 11.0, 12.0, 11.0, 10.0, 9.0, 10.0, 11.0, 12.0],
+    );
     let strategy = root.join("strategy.rs");
     fs::write(
         &strategy,
@@ -95,7 +98,78 @@ tick_size = 0.1
     assert!(stdout.contains("final_equity: 90.000000"));
 }
 
-fn write_bars(path: &std::path::Path) {
+#[test]
+fn cli_reports_an_order_submitted_on_the_final_bar_as_unfilled() {
+    let root = std::env::temp_dir().join(format!("bullet-cli-final-order-{}", std::process::id()));
+    let _ = fs::remove_dir_all(&root);
+    fs::create_dir_all(&root).expect("temporary directory is writable");
+    let parquet = root.join("bars.parquet");
+    write_bars(&parquet, &[10.0, 10.0]);
+    let strategy = root.join("strategy.rs");
+    fs::write(
+        &strategy,
+        r#"
+use bullet::{BarContext, Order, Strategy};
+pub struct BuyEveryBar;
+pub fn strategy() -> BuyEveryBar { BuyEveryBar }
+impl Strategy for BuyEveryBar {
+    fn on_bar(&mut self, _: BarContext<'_>) -> Order { Order::Buy(1) }
+}
+"#,
+    )
+    .expect("strategy source is writable");
+    let config = root.join("backtest.toml");
+    fs::write(
+        &config,
+        format!(
+            r#"
+version = 1
+[backtest]
+mode = "bar"
+initial_cash = 100.0
+currency = "CNY"
+[execution]
+fill_price = "next_bar_open"
+slippage_bps = 0.0
+[fees]
+mode = "per_contract"
+open = 0.0
+close = 0.0
+[[instruments]]
+id = "TEST"
+data = "{}"
+multiplier = 1.0
+margin_rate = 0.1
+tick_size = 0.1
+"#,
+            parquet.display()
+        ),
+    )
+    .expect("config is writable");
+
+    let output = Command::new(env!("CARGO_BIN_EXE_bullet-cli"))
+        .args([
+            "run",
+            strategy.to_str().expect("UTF-8 path"),
+            "--config",
+            config.to_str().expect("UTF-8 path"),
+        ])
+        .output()
+        .expect("CLI starts");
+    let _ = fs::remove_dir_all(&root);
+
+    assert!(
+        output.status.success(),
+        "{}",
+        String::from_utf8_lossy(&output.stderr)
+    );
+    let stdout = String::from_utf8(output.stdout).expect("CLI output is UTF-8");
+    assert!(stdout.contains("fills: 1"));
+    assert!(stdout.contains("unfilled_orders: 1"));
+    assert!(stdout.contains("ending_position.TEST: 1"));
+}
+
+fn write_bars(path: &std::path::Path, prices: &[f64]) {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "date",
@@ -108,23 +182,15 @@ fn write_bars(path: &std::path::Path) {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(TimestampNanosecondArray::from(vec![
-                86_400_000_000_000_i64,
-                172_800_000_000_000,
-                259_200_000_000_000,
-                345_600_000_000_000,
-                432_000_000_000_000,
-                518_400_000_000_000,
-                604_800_000_000_000,
-                691_200_000_000_000,
-                777_600_000_000_000,
-            ])) as ArrayRef,
-            Arc::new(Float64Array::from(vec![
-                10.0, 11.0, 12.0, 11.0, 10.0, 9.0, 10.0, 11.0, 12.0,
-            ])) as ArrayRef,
-            Arc::new(Float64Array::from(vec![
-                10.0, 11.0, 12.0, 11.0, 10.0, 9.0, 10.0, 11.0, 12.0,
-            ])) as ArrayRef,
+            Arc::new(TimestampNanosecondArray::from(
+                prices
+                    .iter()
+                    .enumerate()
+                    .map(|(index, _)| (index as i64 + 1) * 86_400_000_000_000)
+                    .collect::<Vec<_>>(),
+            )) as ArrayRef,
+            Arc::new(Float64Array::from(prices.to_vec())) as ArrayRef,
+            Arc::new(Float64Array::from(prices.to_vec())) as ArrayRef,
         ],
     )
     .expect("valid batch");

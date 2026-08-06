@@ -14,6 +14,7 @@ pub fn run(path: impl AsRef<Path>, strategy: &mut impl Strategy) -> Result<(), B
     println!("runtime_ms: {}", result.runtime_ms);
     println!("peak_rss_bytes: {}", peak_rss_bytes());
     println!("fills: {}", result.fills);
+    println!("unfilled_orders: {}", result.unfilled_orders);
     println!("round_trips: {}", result.round_trips);
     println!("fees_paid: {:.6}", result.fees_paid);
     println!("slippage_paid: {:.6}", result.slippage_paid);

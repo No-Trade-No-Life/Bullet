@@ -17,9 +17,10 @@ fn run() -> Result<(), Box<dyn Error>> {
     let strategy = fs::canonicalize(&arguments.strategy)?;
     let config = fs::canonicalize(&arguments.config)?;
     let cache = strategy_cache(&strategy)?;
+    let package = strategy_package(&cache);
     let target = cache_root().join("target");
     fs::create_dir_all(cache.join("src"))?;
-    fs::write(cache.join("Cargo.toml"), manifest())?;
+    fs::write(cache.join("Cargo.toml"), manifest(&package))?;
     fs::write(cache.join("src/main.rs"), wrapper(&strategy))?;
     let status = Command::new("cargo")
         .args(["build", "--release", "--manifest-path"])
@@ -30,7 +31,7 @@ fn run() -> Result<(), Box<dyn Error>> {
         return Err("strategy compilation failed".into());
     }
     let binary = cache.join("bullet-strategy");
-    fs::copy(target.join("release/bullet-strategy"), &binary)?;
+    fs::copy(target.join("release").join(package), &binary)?;
     println!("strategy_binary: {}", binary.display());
     let status = Command::new(binary).arg(config).status()?;
     if !status.success() {
@@ -39,9 +40,9 @@ fn run() -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn manifest() -> String {
+fn manifest(package: &str) -> String {
     format!(
-        "[package]\nname = \"bullet-strategy\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nbullet = {{ path = \"{}\" }}\n",
+        "[package]\nname = \"{package}\"\nversion = \"0.0.0\"\nedition = \"2024\"\n\n[dependencies]\nbullet = {{ path = \"{}\" }}\n",
         escape(
             Path::new(env!("CARGO_MANIFEST_DIR"))
                 .parent()
@@ -65,6 +66,16 @@ fn escape(path: impl AsRef<Path>) -> String {
 }
 fn cache_root() -> PathBuf {
     std::env::temp_dir().join("bullet")
+}
+
+fn strategy_package(cache: &Path) -> String {
+    format!(
+        "bullet-strategy-{}",
+        cache
+            .file_name()
+            .expect("strategy cache has a hash directory")
+            .to_string_lossy()
+    )
 }
 
 fn strategy_cache(strategy: &Path) -> Result<PathBuf, std::io::Error> {

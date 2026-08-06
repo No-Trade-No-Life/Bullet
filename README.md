@@ -72,7 +72,7 @@ Version 1 accepts only `mode = "bar"`, `fill_price = "next_bar_open"`, and `fees
 
 ## Evaluation output
 
-Every run reports a single Bullet-defined record: data bytes, bars, runtime, peak RSS, fills, round trips, costs, final position per instrument, cumulative return, CAGR, daily UTC equity Sharpe, maximum drawdown, and CAGR / absolute maximum drawdown.
+Every run reports a single Bullet-defined record: data bytes, bars, runtime, peak RSS, fills, unfilled final-bar orders, round trips, costs, final position per instrument, cumulative return, CAGR, daily UTC equity Sharpe, maximum drawdown, and CAGR / absolute maximum drawdown. Orders submitted on an instrument’s last bar remain pending because no next-bar open exists; they are reported, but do not affect fills, positions, or performance.
 
 The version-1 equity model uses configured multipliers, zero risk-free rate, `sqrt(252)` Sharpe annualization, configured per-contract fees and adverse basis-point slippage. It does not yet model intraday margin calls, close-today fees, funding, borrow, corporate actions, or tick/level-2 execution.
 
