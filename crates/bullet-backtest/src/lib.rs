@@ -336,12 +336,19 @@ impl State {
             return Ok(());
         };
         let position = self.positions[symbol];
-        let quantity = order.quantity as i64;
+        let quantity = i64::try_from(order.quantity).map_err(|_| BacktestError::PositionLimit {
+            instrument: symbol.to_owned(),
+        })?;
         let change = match order.side {
             Side::Buy => quantity,
             Side::Sell => -quantity,
         };
-        let next_position = position + change;
+        let next_position = position
+            .checked_add(change)
+            .filter(|position| *position != i64::MIN)
+            .ok_or_else(|| BacktestError::PositionLimit {
+                instrument: symbol.to_owned(),
+            })?;
         let adjustment = open * config.execution.slippage_bps / 10_000.0;
         let price = match order.side {
             Side::Buy => open + adjustment,
@@ -465,6 +472,9 @@ pub enum BacktestError {
     Data(bullet_data::DataError),
     EmptyBars,
     PendingOrder(String),
+    PositionLimit {
+        instrument: String,
+    },
     InsufficientMargin {
         instrument: String,
         required: f64,
@@ -482,6 +492,12 @@ impl fmt::Display for BacktestError {
             Self::Data(e) => write!(f, "cannot read bars: {e}"),
             Self::EmptyBars => f.write_str("backtest requires at least one bar"),
             Self::PendingOrder(symbol) => write!(f, "pending order already exists for {symbol}"),
+            Self::PositionLimit { instrument } => {
+                write!(
+                    f,
+                    "order exceeds Bullet's signed position limit for {instrument}"
+                )
+            }
             Self::InsufficientMargin {
                 instrument,
                 required,
@@ -501,5 +517,96 @@ impl Error for BacktestError {
             Self::Data(e) => Some(e),
             _ => None,
         }
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use std::collections::BTreeMap;
+    use std::path::PathBuf;
+
+    use super::{
+        BacktestConfig, BacktestError, Config, ExecutionConfig, FeeMode, FeesConfig, FillPrice,
+        InstrumentConfig, Mode, Order, State,
+    };
+
+    fn config() -> Config {
+        Config {
+            version: 1,
+            backtest: BacktestConfig {
+                mode: Mode::Bar,
+                initial_cash: 1_000_000.0,
+                currency: "CNY".to_owned(),
+            },
+            execution: ExecutionConfig {
+                fill_price: FillPrice::NextBarOpen,
+                slippage_bps: 0.0,
+            },
+            fees: FeesConfig {
+                mode: FeeMode::PerContract,
+                open: 0.0,
+                close: 0.0,
+            },
+            instruments: vec![instrument()],
+        }
+    }
+
+    fn instrument() -> InstrumentConfig {
+        InstrumentConfig {
+            id: "TEST".to_owned(),
+            data: PathBuf::new(),
+            multiplier: 1.0,
+            margin_rate: 0.1,
+            tick_size: 0.1,
+        }
+    }
+
+    fn instruments(config: &Config) -> BTreeMap<&str, &InstrumentConfig> {
+        config
+            .instruments
+            .iter()
+            .map(|instrument| (instrument.id.as_str(), instrument))
+            .collect()
+    }
+
+    #[test]
+    fn rejects_an_order_quantity_that_cannot_fit_a_signed_position() {
+        let config = config();
+        let instruments = instruments(&config);
+        let instrument = instruments["TEST"];
+        let mut state = State::new(config.backtest.initial_cash, &config.instruments);
+        state
+            .submit("TEST", Order::Buy(u64::MAX))
+            .expect("the order is pending until its next-bar fill");
+
+        let error = state
+            .fill_pending("TEST", 100.0, instrument, &instruments, &config)
+            .expect_err("an unrepresentable quantity is rejected");
+
+        assert!(
+            matches!(error, BacktestError::PositionLimit { instrument } if instrument == "TEST")
+        );
+        assert_eq!(state.positions["TEST"], 0);
+    }
+
+    #[test]
+    fn rejects_a_fill_that_would_overflow_the_signed_position_limit() {
+        let config = config();
+        let instruments = instruments(&config);
+        let instrument = instruments["TEST"];
+        let mut state = State::new(config.backtest.initial_cash, &config.instruments);
+        state.positions.insert("TEST".to_owned(), i64::MAX);
+        state
+            .submit("TEST", Order::Buy(1))
+            .expect("the order is pending until its next-bar fill");
+
+        let error = state
+            .fill_pending("TEST", 100.0, instrument, &instruments, &config)
+            .expect_err("a position beyond the signed limit is rejected");
+
+        assert!(
+            matches!(error, BacktestError::PositionLimit { instrument } if instrument == "TEST")
+        );
+        assert_eq!(state.positions["TEST"], i64::MAX);
     }
 }
