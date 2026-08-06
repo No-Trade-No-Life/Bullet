@@ -304,7 +304,11 @@ impl State {
                 quantity,
             },
             Order::Close => PendingOrder {
-                side: Side::Sell,
+                side: if position.is_positive() {
+                    Side::Sell
+                } else {
+                    Side::Buy
+                },
                 quantity: position.unsigned_abs(),
             },
         };
@@ -332,22 +336,22 @@ impl State {
             return Ok(());
         };
         let position = self.positions[symbol];
-        if matches!(order.side, Side::Sell) && order.quantity as i64 > position {
-            return Err(BacktestError::InsufficientPosition {
-                instrument: symbol.to_owned(),
-                position,
-                requested: order.quantity,
-            });
-        }
+        let quantity = order.quantity as i64;
+        let change = match order.side {
+            Side::Buy => quantity,
+            Side::Sell => -quantity,
+        };
+        let next_position = position + change;
         let adjustment = open * config.execution.slippage_bps / 10_000.0;
         let price = match order.side {
             Side::Buy => open + adjustment,
             Side::Sell => open - adjustment,
         };
         let notional = price * order.quantity as f64 * instrument.multiplier;
-        if matches!(order.side, Side::Buy) {
-            let required_margin = (position + order.quantity as i64) as f64 * notional
-                / order.quantity as f64
+        if next_position.unsigned_abs() > position.unsigned_abs() {
+            let required_margin = next_position.unsigned_abs() as f64
+                * price
+                * instrument.multiplier
                 * instrument.margin_rate;
             let equity = self.equity(instruments);
             if required_margin > equity {
@@ -358,22 +362,22 @@ impl State {
                 });
             }
         }
-        let fee = match order.side {
-            Side::Buy => config.fees.open,
-            Side::Sell => config.fees.close,
-        } * order.quantity as f64;
+        let closing_quantity = if position.signum() != change.signum() {
+            position.unsigned_abs().min(order.quantity)
+        } else {
+            0
+        };
+        let fee = closing_quantity as f64 * config.fees.close
+            + (order.quantity - closing_quantity) as f64 * config.fees.open;
         match order.side {
-            Side::Buy => {
-                self.cash -= notional + fee;
-                self.positions
-                    .insert(symbol.to_owned(), position + order.quantity as i64);
-            }
-            Side::Sell => {
-                self.cash += notional - fee;
-                self.positions
-                    .insert(symbol.to_owned(), position - order.quantity as i64);
-                self.round_trips += 1;
-            }
+            Side::Buy => self.cash -= notional + fee,
+            Side::Sell => self.cash += notional - fee,
+        }
+        self.positions.insert(symbol.to_owned(), next_position);
+        if position != 0
+            && (next_position == 0 || position.is_positive() != next_position.is_positive())
+        {
+            self.round_trips += 1;
         }
         self.fills += 1;
         self.fees_paid += fee;
@@ -461,11 +465,6 @@ pub enum BacktestError {
     Data(bullet_data::DataError),
     EmptyBars,
     PendingOrder(String),
-    InsufficientPosition {
-        instrument: String,
-        position: i64,
-        requested: u64,
-    },
     InsufficientMargin {
         instrument: String,
         required: f64,
@@ -483,14 +482,6 @@ impl fmt::Display for BacktestError {
             Self::Data(e) => write!(f, "cannot read bars: {e}"),
             Self::EmptyBars => f.write_str("backtest requires at least one bar"),
             Self::PendingOrder(symbol) => write!(f, "pending order already exists for {symbol}"),
-            Self::InsufficientPosition {
-                instrument,
-                position,
-                requested,
-            } => write!(
-                f,
-                "cannot sell {requested} {instrument}; position is {position}"
-            ),
             Self::InsufficientMargin {
                 instrument,
                 required,
