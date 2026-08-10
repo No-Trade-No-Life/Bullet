@@ -8,11 +8,17 @@ use std::{
 use chrono::NaiveTime;
 use serde::Deserialize;
 
+const LAB0334_SYMBOLS: [&str; 4] = ["IC8888", "IF8888", "IH8888", "IM8888"];
+
 #[derive(Clone, Debug, Deserialize)]
 pub struct LiveConfig {
+    /// Stable remote-account identifier, not a human display name.
     pub account_id: String,
     pub bind_address: SocketAddr,
-    pub history_tail_bars: usize,
+    /// Number of complete Parquet bars replayed before CTPD becomes authoritative.
+    /// Set this above every configured file's row count to reconstruct the full
+    /// causal label history used by the default lab-0334 arbitrator.
+    pub history_seed_bars: usize,
     pub ctpd: CtpdConfig,
     pub remote_account: RemoteAccountConfig,
     pub instruments: Vec<InstrumentConfig>,
@@ -27,27 +33,33 @@ pub struct CtpdConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct RemoteAccountConfig {
-    /// This has no serde default: deployment must explicitly choose its public
-    /// access policy instead of silently exposing a simulated account.
+    /// This has no serde default: every deployment explicitly chooses whether
+    /// its target account is publicly readable.
     pub allow_unauthenticated: bool,
     pub bearer_token_file: Option<PathBuf>,
 }
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct InstrumentConfig {
-    /// Stable continuous-series name used by the historical lab, such as IF.
+    /// Exact E-Works continuous-series identifier, for example `IF8888`.
     pub symbol: String,
-    /// Explicit currently tradable CTP contract. Roll this mapping at expiry.
-    pub ctpd_instrument_id: String,
+    /// CTPD synthetic continuous index used for both SSE and Kline recovery,
+    /// for example `IDX-CFFEX-IF`.
+    pub market_instrument_id: String,
+    /// Explicit front contract exposed as the simulated target position. It is
+    /// a deployment-owned roll mapping and is never inferred from `8888`.
+    pub target_instrument_id: String,
     pub parquet: PathBuf,
-    pub target_contracts: i64,
+    /// The whole-portfolio contract amount for a position_weight of 1.0. A
+    /// value such as 10 keeps the lab's 0.70/0.30 sleeves representable.
+    pub full_weight_contracts: f64,
     pub contract_multiplier: f64,
-    /// Number of complete one-minute rows in the configured normal session.
-    /// It makes the offline rule's required exit row knowable before entry.
+    /// The expected number of completed one-minute bars in the normal CFFEX
+    /// day session. lab0334's late-exit rule is expressed in remaining bars.
     pub session_bar_count: usize,
-    /// Latest Parquet `date` at which a signal can still have its twentieth
-    /// following row in the configured trading session.
-    pub last_executable_signal_time: String,
+    /// The bar-end time whose open is the lab's EOD exit price. The current
+    /// E-Works data contract is 15:00:00.
+    pub session_end_time: String,
 }
 
 #[derive(Clone, Debug)]
@@ -58,29 +70,26 @@ pub struct Secrets {
 
 impl LiveConfig {
     pub fn load(path: impl AsRef<Path>) -> Result<(Self, Secrets), String> {
-        let text =
-            fs::read_to_string(path).map_err(|error| format!("cannot read config: {error}"))?;
-        let config: Self =
-            toml::from_str(&text).map_err(|error| format!("invalid config: {error}"))?;
-        config.validate()?;
+        let config = Self::load_without_secrets(path)?;
         let ctpd_bearer_token = read_secret(&config.ctpd.bearer_token_file)?;
-        let remote_bearer_token =
-            match (
-                config.remote_account.allow_unauthenticated,
-                config.remote_account.bearer_token_file.as_ref(),
-            ) {
-                (false, Some(path)) => Some(read_secret(path)?),
-                (true, None) => None,
-                (true, Some(_)) => {
-                    return Err(
-                        "remote_account cannot set a token when allow_unauthenticated=true".into(),
-                    );
-                }
-                (false, None) => return Err(
+        let remote_bearer_token = match (
+            config.remote_account.allow_unauthenticated,
+            config.remote_account.bearer_token_file.as_ref(),
+        ) {
+            (false, Some(path)) => Some(read_secret(path)?),
+            (true, None) => None,
+            (true, Some(_)) => {
+                return Err(
+                    "remote_account cannot set a token when allow_unauthenticated=true".into(),
+                );
+            }
+            (false, None) => {
+                return Err(
                     "remote_account requires bearer_token_file when allow_unauthenticated=false"
                         .into(),
-                ),
-            };
+                );
+            }
+        };
         Ok((
             config,
             Secrets {
@@ -90,44 +99,59 @@ impl LiveConfig {
         ))
     }
 
-    fn validate(&self) -> Result<(), String> {
+    /// Parses only public configuration and validates the Parquet seed. This
+    /// supports bounded startup profiling without reading API credentials.
+    pub fn load_without_secrets(path: impl AsRef<Path>) -> Result<Self, String> {
+        let text =
+            fs::read_to_string(path).map_err(|error| format!("cannot read config: {error}"))?;
+        let config: Self =
+            toml::from_str(&text).map_err(|error| format!("invalid config: {error}"))?;
+        config.validate()?;
+        Ok(config)
+    }
+
+    pub fn validate(&self) -> Result<(), String> {
         if self.account_id.trim().is_empty() {
             return Err("account_id must not be empty".into());
         }
-        if self.history_tail_bars == 0 {
-            return Err("history_tail_bars must be positive".into());
+        if self.history_seed_bars < 5_000 {
+            return Err("history_seed_bars must be at least 5000 for lab0334 ATR history".into());
         }
         if self.ctpd.base_url.trim().is_empty() || self.ctpd.stale_after_ms == 0 {
             return Err("ctpd base_url and stale_after_ms must be configured".into());
         }
-        if self.instruments.is_empty() {
-            return Err("at least one instrument is required".into());
+        if self.instruments.len() != LAB0334_SYMBOLS.len() {
+            return Err("lab0334 requires exactly IC8888, IF8888, IH8888 and IM8888".into());
         }
-        let mut ids = BTreeSet::new();
+
         let mut symbols = BTreeSet::new();
+        let mut market_ids = BTreeSet::new();
+        let mut targets = BTreeSet::new();
         for instrument in &self.instruments {
-            if instrument.symbol.trim().is_empty()
-                || instrument.ctpd_instrument_id.trim().is_empty()
-                || instrument.target_contracts <= 0
+            let end_time = NaiveTime::parse_from_str(&instrument.session_end_time, "%H:%M:%S")
+                .map_err(|_| "each session_end_time must be HH:MM:SS")?;
+            if end_time != NaiveTime::from_hms_opt(15, 0, 0).expect("valid fixed close")
+                || instrument.symbol.trim().is_empty()
+                || instrument.market_instrument_id.trim().is_empty()
+                || instrument.target_instrument_id.trim().is_empty()
+                || !instrument.full_weight_contracts.is_finite()
+                || instrument.full_weight_contracts <= 0.0
                 || !instrument.contract_multiplier.is_finite()
                 || instrument.contract_multiplier <= 0.0
-                || instrument.session_bar_count < 80
-                || NaiveTime::parse_from_str(&instrument.last_executable_signal_time, "%H:%M:%S")
-                    .is_err()
+                || instrument.session_bar_count != 240
             {
-                return Err("each instrument requires names, positive contracts, a positive finite multiplier, at least 80 session bars, and an HH:MM:SS signal cutoff".into());
+                return Err("each lab0334 instrument requires the 240-bar 15:00:00 session, names, and positive finite contract sizing".into());
             }
-            if !ids.insert(instrument.ctpd_instrument_id.clone()) {
-                return Err("ctpd_instrument_id must be unique".into());
+            symbols.insert(instrument.symbol.as_str());
+            if !market_ids.insert(instrument.market_instrument_id.as_str()) {
+                return Err("market_instrument_id must be unique".into());
             }
-            if !symbols.insert(instrument.symbol.clone()) {
-                return Err("symbol must be unique so remote position IDs stay unique".into());
+            if !targets.insert(instrument.target_instrument_id.as_str()) {
+                return Err("target_instrument_id must be unique".into());
             }
-            if self.history_tail_bars < instrument.session_bar_count {
-                return Err(
-                    "history_tail_bars must cover every bar in each configured session".into(),
-                );
-            }
+        }
+        if symbols.into_iter().collect::<Vec<_>>() != LAB0334_SYMBOLS {
+            return Err("lab0334 symbols must be IC8888, IF8888, IH8888 and IM8888".into());
         }
         Ok(())
     }
@@ -148,13 +172,26 @@ mod tests {
 
     use super::{CtpdConfig, InstrumentConfig, LiveConfig, RemoteAccountConfig};
 
+    fn instrument(symbol: &str, market: &str, target: &str) -> InstrumentConfig {
+        InstrumentConfig {
+            symbol: symbol.into(),
+            market_instrument_id: market.into(),
+            target_instrument_id: target.into(),
+            parquet: PathBuf::from("/unused"),
+            full_weight_contracts: 10.0,
+            contract_multiplier: 300.0,
+            session_bar_count: 240,
+            session_end_time: "15:00:00".into(),
+        }
+    }
+
     fn valid_config() -> LiveConfig {
         LiveConfig {
-            account_id: "BULLET/lab0344-sim".into(),
+            account_id: "BULLET/lab0334-sim".into(),
             bind_address: "127.0.0.1:8091".parse().unwrap(),
-            history_tail_bars: 240,
+            history_seed_bars: 1_000_000,
             ctpd: CtpdConfig {
-                base_url: "http://127.0.0.1:8080".into(),
+                base_url: "https://ctpd.example.test".into(),
                 bearer_token_file: PathBuf::from("/unused"),
                 stale_after_ms: 10_000,
             },
@@ -162,36 +199,31 @@ mod tests {
                 allow_unauthenticated: false,
                 bearer_token_file: Some(PathBuf::from("/unused")),
             },
-            instruments: vec![InstrumentConfig {
-                symbol: "IF".into(),
-                ctpd_instrument_id: "IF2609".into(),
-                parquet: PathBuf::from("/unused"),
-                target_contracts: 1,
-                contract_multiplier: 300.0,
-                session_bar_count: 240,
-                last_executable_signal_time: "14:40:00".into(),
-            }],
+            instruments: vec![
+                instrument("IC8888", "IDX-CFFEX-IC", "IC2609"),
+                instrument("IF8888", "IDX-CFFEX-IF", "IF2609"),
+                instrument("IH8888", "IDX-CFFEX-IH", "IH2609"),
+                instrument("IM8888", "IDX-CFFEX-IM", "IM2609"),
+            ],
         }
     }
 
     #[test]
-    fn requires_the_history_tail_to_cover_the_session() {
+    fn requires_the_complete_lab0334_universe() {
         let mut config = valid_config();
-        config.history_tail_bars = 239;
-        assert!(config.validate().unwrap_err().contains("history_tail_bars"));
+        config.instruments.pop();
+        assert!(config.validate().unwrap_err().contains("exactly"));
     }
 
     #[test]
-    fn rejects_duplicate_symbols_that_would_collide_remotely() {
+    fn rejects_duplicate_target_instruments() {
         let mut config = valid_config();
-        let mut duplicate = config.instruments[0].clone();
-        duplicate.ctpd_instrument_id = "IF2612".into();
-        config.instruments.push(duplicate);
+        config.instruments[1].target_instrument_id = "IC2609".into();
         assert!(
             config
                 .validate()
                 .unwrap_err()
-                .contains("symbol must be unique")
+                .contains("target_instrument_id")
         );
     }
 }

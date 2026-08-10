@@ -12,7 +12,11 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 
 const DATE_COLUMN: &str = "date";
 const OPEN_COLUMN: &str = "open";
+const HIGH_COLUMN: &str = "high";
+const LOW_COLUMN: &str = "low";
 const CLOSE_COLUMN: &str = "close";
+const VOLUME_COLUMN: &str = "volume";
+const MONEY_COLUMN: &str = "money";
 const OPEN_INTEREST_COLUMN: &str = "open_interest";
 
 /// A historical bar used to seed a live strategy before CTPD ticks take over.
@@ -24,7 +28,11 @@ const OPEN_INTEREST_COLUMN: &str = "open_interest";
 pub struct HistoryBar {
     pub timestamp_ns: u64,
     pub open: f64,
+    pub high: f64,
+    pub low: f64,
     pub close: f64,
+    pub volume: f64,
+    pub money: f64,
     pub open_interest: f64,
 }
 
@@ -91,29 +99,58 @@ fn append_batch(bars: &mut Vec<Bar>, batch: &RecordBatch) -> Result<(), DataErro
 fn append_history_batch(bars: &mut Vec<HistoryBar>, batch: &RecordBatch) -> Result<(), DataError> {
     let dates = required_date_column(batch)?;
     let opens = required_f64_column(batch, OPEN_COLUMN)?;
+    let highs = required_f64_column(batch, HIGH_COLUMN)?;
+    let lows = required_f64_column(batch, LOW_COLUMN)?;
     let closes = required_f64_column(batch, CLOSE_COLUMN)?;
+    let volumes = required_f64_column(batch, VOLUME_COLUMN)?;
+    let monies = required_f64_column(batch, MONEY_COLUMN)?;
     let open_interest = required_f64_column(batch, OPEN_INTEREST_COLUMN)?;
 
     for row in 0..batch.num_rows() {
         let timestamp_ns = timestamp_ns(required_value(dates, row, DATE_COLUMN)?, row)?;
         let open = finite(required_value(opens, row, OPEN_COLUMN)?, row, OPEN_COLUMN)?;
+        let high = finite(required_value(highs, row, HIGH_COLUMN)?, row, HIGH_COLUMN)?;
+        let low = finite(required_value(lows, row, LOW_COLUMN)?, row, LOW_COLUMN)?;
         let close = finite(
             required_value(closes, row, CLOSE_COLUMN)?,
             row,
             CLOSE_COLUMN,
+        )?;
+        let volume = finite(
+            required_value(volumes, row, VOLUME_COLUMN)?,
+            row,
+            VOLUME_COLUMN,
+        )?;
+        let money = finite(
+            required_value(monies, row, MONEY_COLUMN)?,
+            row,
+            MONEY_COLUMN,
         )?;
         let open_interest = finite(
             required_value(open_interest, row, OPEN_INTEREST_COLUMN)?,
             row,
             OPEN_INTEREST_COLUMN,
         )?;
-        if open <= 0.0 || close <= 0.0 || open_interest < 0.0 {
+        if open <= 0.0
+            || high < open
+            || high < close
+            || low <= 0.0
+            || low > open
+            || low > close
+            || volume < 0.0
+            || money < 0.0
+            || open_interest < 0.0
+        {
             return Err(DataError::InvalidHistoryValue { row });
         }
         bars.push(HistoryBar {
             timestamp_ns,
             open,
+            high,
+            low,
             close,
+            volume,
+            money,
             open_interest,
         });
     }
@@ -263,7 +300,7 @@ impl fmt::Display for DataError {
             }
             Self::InvalidHistoryValue { row } => write!(
                 formatter,
-                "open, close and open_interest must be positive/finite at row {row}"
+                "OHLC, volume, money and open_interest are invalid at row {row}"
             ),
             Self::EmptyTail => formatter.write_str("history tail must contain at least one bar"),
             Self::NonIncreasingTimestamp { row } => {
@@ -367,7 +404,11 @@ mod tests {
                 false,
             ),
             Field::new("open", DataType::Float64, false),
+            Field::new("high", DataType::Float64, false),
+            Field::new("low", DataType::Float64, false),
             Field::new("close", DataType::Float64, false),
+            Field::new("volume", DataType::Float64, false),
+            Field::new("money", DataType::Float64, false),
             Field::new("open_interest", DataType::Float64, false),
         ]));
         let batch = RecordBatch::try_new(
@@ -376,6 +417,10 @@ mod tests {
                 Arc::new(TimestampNanosecondArray::from(vec![1_i64, 2, 3])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![100.0, 101.0, 102.0])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![101.0, 102.0, 103.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![99.0, 100.0, 101.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![101.0, 102.0, 103.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![10.0, 11.0, 12.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![1_000.0, 1_100.0, 1_200.0])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![10.0, 11.0, 12.0])) as ArrayRef,
             ],
         )

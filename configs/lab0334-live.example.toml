@@ -1,0 +1,63 @@
+# This is the exact four-series lab-0334 universe. Tokens are one-line files
+# outside the repository and never belong in this configuration.
+account_id = "BULLET/lab0334-sim"
+bind_address = "127.0.0.1:8091"
+# A full causal replay is required for default candidate-label history. Choose
+# a value higher than the largest local Parquet file rather than guessing a
+# short tail that would change the online arbitrator.
+history_seed_bars = 1_000_000
+
+[ctpd]
+# Must be the HTTPS public CTPD origin reachable from the Singapore instance.
+base_url = "https://ctpd.example.com"
+bearer_token_file = "/etc/bullet/ctpd.token"
+stale_after_ms = 10000
+
+[remote_account]
+# Explicitly choose the remote-account access policy. With false, configure
+# the same full Bearer value in the 1Exchange Custom Account Source.
+allow_unauthenticated = false
+bearer_token_file = "/etc/bullet/remote-account.token"
+
+# market_instrument_id is the CTPD continuous synthetic index used for the
+# Parquet splice, SSE and Kline recovery. target_instrument_id is the current
+# front contract shown in the simulated account and must be rolled explicitly.
+[[instruments]]
+symbol = "IC8888"
+market_instrument_id = "IDX-CFFEX-IC"
+target_instrument_id = "IC2609"
+parquet = "/var/lib/bullet/IC8888.parquet"
+full_weight_contracts = 10.0
+contract_multiplier = 200.0
+session_bar_count = 240
+session_end_time = "15:00:00"
+
+[[instruments]]
+symbol = "IF8888"
+market_instrument_id = "IDX-CFFEX-IF"
+target_instrument_id = "IF2609"
+parquet = "/var/lib/bullet/IF8888.parquet"
+full_weight_contracts = 10.0
+contract_multiplier = 300.0
+session_bar_count = 240
+session_end_time = "15:00:00"
+
+[[instruments]]
+symbol = "IH8888"
+market_instrument_id = "IDX-CFFEX-IH"
+target_instrument_id = "IH2609"
+parquet = "/var/lib/bullet/IH8888.parquet"
+full_weight_contracts = 10.0
+contract_multiplier = 300.0
+session_bar_count = 240
+session_end_time = "15:00:00"
+
+[[instruments]]
+symbol = "IM8888"
+market_instrument_id = "IDX-CFFEX-IM"
+target_instrument_id = "IM2609"
+parquet = "/var/lib/bullet/IM8888.parquet"
+full_weight_contracts = 10.0
+contract_multiplier = 200.0
+session_bar_count = 240
+session_end_time = "15:00:00"
