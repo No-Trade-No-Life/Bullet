@@ -59,6 +59,11 @@ cargo build --release -p bullet-live
 ./target/release/bullet-live serve /etc/bullet/lab0344.toml
 ```
 
+每次合并到 `main` 的 release 工作流还会发布
+`bullet-live-x86_64-unknown-linux-musl` GitHub Actions artifact：其中只有 Linux x86_64
+静态二进制及同名 `.sha256` 校验和。下载后先以 `sha256sum -c` 校验，再放置到目标机；
+其他目标平台必须用对应 Rust target 重新构建并生成其校验和。
+
 性能口径是“已反序列化的 CTPD Tick 进入进程”到“目标持仓状态发布”的单次推理。
 它不包含上游网络传输、SSE 等待、Parquet 启动读取或 1Exchange 的 HTTP 拉取。
 `benchmark` 会输出 p50/p99/max，并在 p99 达到 100ms 时以失败退出。

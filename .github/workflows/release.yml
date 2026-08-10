@@ -13,4 +13,18 @@ jobs:
     steps:
       - uses: actions/checkout@v4
       - uses: dtolnay/rust-toolchain@stable
-      - run: cargo build --workspace --release
+      - run: cargo build --workspace --release --locked
+      - run: sudo apt-get update && sudo apt-get install --yes musl-tools
+      - run: rustup target add x86_64-unknown-linux-musl
+      - run: cargo build --release --locked -p bullet-live --target x86_64-unknown-linux-musl
+      - run: |
+          mkdir -p dist
+          cp target/x86_64-unknown-linux-musl/release/bullet-live dist/bullet-live-x86_64-unknown-linux-musl
+          sha256sum dist/bullet-live-x86_64-unknown-linux-musl > dist/bullet-live-x86_64-unknown-linux-musl.sha256
+      - uses: actions/upload-artifact@v4
+        with:
+          name: bullet-live-x86_64-unknown-linux-musl
+          path: |
+            dist/bullet-live-x86_64-unknown-linux-musl
+            dist/bullet-live-x86_64-unknown-linux-musl.sha256
+          if-no-files-found: error
