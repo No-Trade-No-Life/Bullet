@@ -6,6 +6,7 @@ members = [
   "crates/bullet-backtest",
   "crates/bullet-cli",
   "crates/bullet",
+  "crates/bullet-live",
 ]
 resolver = "3"
 
