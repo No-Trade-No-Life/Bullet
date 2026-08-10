@@ -1,185 +1,119 @@
 # Bullet
 
-## lab-0344 实时模拟账户
+## lab-0334 实盘目标仓位运行器
 
-`bullet-live` 是一个可部署的单一 Rust 二进制。它启动时从 Parquet 读取尾部
-K 线以拼接状态，随后只消费 CTPD 的认证 `GET /v1/ticks?instrument_id=...`
-SSE 行情；每个已完成分钟线触发一次内存内推理。它提供 1Exchange Remote
-Custom Account Source 所需的 `GET /api/accounts` 和
-`GET /api/positions?account_id=...`。
+`bullet-live` 是可部署到 Linux x86_64 的单一 Rust 二进制。它把 E-Works
+`lab-0334/run_conceptual.py` 的默认并行候选路径接到 Parquet 与 CTPD：启动时
+完整回放四个连续合约 Parquet，随后以 CTPD `IDX-CFFEX-*` 已完成分钟 K 线和 SSE
+Tick 延续状态，并暴露 1Exchange Remote Account Source 所需的两个端点。
 
-lab-0344 在 E-Works 中的状态是 `process_exception_not_freezable`：其固定规则
-已经得到负结果，且不具备策略冻结或真实下单资格。因此该二进制**只输出目标
-模拟账户**，不连接下单接口；每个期货持仓的 `comment` 也会保留此状态。
+默认可信语义是：主策略只使用 `IC8888`、`IH8888`；`IF8888`、`IM8888` 参与
+四品种候选池和对应 overlay。候选标签严格在
+`label_available_time < prediction_asof_time` 时成熟，同一时点按
+`entry_time, trade_type, symbol, trade_id` 顺序仲裁。它不会下实盘订单，只发布
+模拟目标持仓。
 
-最小配置（token 文件内容均为单行密钥，不要提交）：
+运行器的安全边界是 fail-closed：CTPD 任一连接断开、超时或出现乱序行情时，公开
+目标立即清空；所有品种重新以 `/v1/klines` 校准后才重新发布。Kline 只接受
+`closed=true`，与 Parquet 重叠的 Bar 不会重复回放。Parquet 超过 72 小时未更新时
+拒绝启动实时推理，而非用断档数据推导仓位。
 
-```toml
-account_id = "BULLET/lab0344-sim"
-bind_address = "127.0.0.1:8091"
-history_tail_bars = 600
+### 配置
 
-[ctpd]
-base_url = "http://127.0.0.1:8080"
-bearer_token_file = "/etc/bullet/ctpd.token"
-stale_after_ms = 10000
+从 [lab0334-live.example.toml](configs/lab0334-live.example.toml) 创建
+`/etc/bullet/lab0334.toml`。配置包含完整的 `IC/IF/IH/IM` universe、CTPD 连续指数
+与当前目标合约之间的显式映射。`target_instrument_id` 到期前由部署负责人换月；运行器
+绝不会把 `8888` 自动猜成可交易合约。
 
-[remote_account]
-allow_unauthenticated = false
-bearer_token_file = "/etc/bullet/remote-account.token"
+`history_seed_bars` 必须覆盖每个文件的完整可用历史，默认 1,000,000。缩短它会改变
+默认仲裁器的成熟标签历史，不是一个可接受的性能开关。
 
-[[instruments]]
-symbol = "IF"
-ctpd_instrument_id = "IF2609"
-parquet = "/var/lib/bullet/IF8888.parquet"
-target_contracts = 1
-contract_multiplier = 300.0
-session_bar_count = 240
-last_executable_signal_time = "14:40:00"
-```
+令牌放在权限为 `0600` 的一行文件中：`/etc/bullet/ctpd.token` 与
+`/etc/bullet/remote-account.token`。示例明确设置
+`allow_unauthenticated = false`；不得在生产环境把目标持仓公开匿名访问。
 
-`ctpd_instrument_id` 是显式的连续合约到当前可交易合约映射。换月必须更新该值，
-不能把 `IF8888` 直接当作 CTP 合约订阅。输入失效、SSE 断开或超出
-`stale_after_ms` 时，Bullet 会清空该合约目标持仓（fail-closed，失效即归零）。
-清空也会丢弃未完成 K 线、当日行号、已见信号和计划仓位；重连只会用新收到的完整
-分钟线重新累计，绝不跨断线拼接。CTPD 的 `action_day + update_time` 是自然日边界，
-不能用夜盘归属的 `trading_day` 替代。
-
-`history_tail_bars` 必须覆盖一个完整的配置交易日。示例的 CFFEX 股指期货会话有
-240 根一分钟线，所以 `600` 满足该约束。启动时运行器会回放尾部最后一个自然日的
-所有完成 K 线，恢复“每日第一个信号”、挂起入场和已持有目标；Parquet `date` 必须是
-以中国市场本地钟表示的分钟结束时间。`session_bar_count` 和
-`last_executable_signal_time` 是可执行性契约：只有第 60 至第 220 行且不晚于 14:40
-结束的首信号才可能拥有第 240 行退出。换交易所、交易时间或 Parquet 标注语义时，必须
-先依据该来源的完整会话重新配置并重放验证，不能沿用此示例。
+### 构建与性能门禁
 
 ```bash
 cargo build --release -p bullet-live
 ./target/release/bullet-live benchmark 20000
-./target/release/bullet-live serve /etc/bullet/lab0344.toml
+/usr/bin/time -v ./target/release/bullet-live seed-benchmark /etc/bullet/lab0334.toml
 ```
 
-每次合并到 `main` 的 release 工作流还会发布
-`bullet-live-x86_64-unknown-linux-musl` GitHub Actions artifact：其中只有 Linux x86_64
-静态二进制及同名 `.sha256` 校验和。下载后先以 `sha256sum -c` 校验，再放置到目标机；
-其他目标平台必须用对应 Rust target 重新构建并生成其校验和。
+基准测量预热后一个 CTPD Tick 进入 `Portfolio`，直到同步更新已发布 target state 的完整
+进程内热路径，输出 `p50_ns`、`p99_ns` 与 `max_ns`。`p99_ns` 必须低于
+100,000,000 才会返回成功。Parquet 启动回放、网络传输和 1Exchange HTTP 轮询不属于
+这个 100ms 内核延迟定义，分别在部署验收中检查。
 
-性能口径是“已反序列化的 CTPD Tick 进入进程”到“目标持仓状态发布”的单次推理。
-它不包含上游网络传输、SSE 等待、Parquet 启动读取或 1Exchange 的 HTTP 拉取。
-`benchmark` 会输出 p50/p99/max，并在 p99 达到 100ms 时以失败退出。
+`seed-benchmark` 不读取令牌或连接 CTPD，只回放生产 Parquet；配合
+`/usr/bin/time -v` 记录完整启动耗时和峰值 RSS，作为 t3a.small 的资源门禁。
 
-### 部署到 1Exchange
+每次合并到 `main` 的 release workflow 还构建完全静态的
+`bullet-live-x86_64-unknown-linux-musl` 与 SHA-256 文件，适合 Amazon Linux 2023。
 
-`bind_address = "127.0.0.1:8091"` 仅用于将二进制限制在反向代理上游；它不能直接
-注册到 1Exchange。生产部署需要一个只解析到公网地址、无重定向的 HTTPS 域名，例如
-由 Caddy 或 Nginx 将 `https://bullet-live.example.com` 反向代理到该 loopback 地址。代理
-必须保留 `Authorization`，不得把账户接口暴露为匿名服务；`remote-account.token` 的内容
-与 1Exchange Custom Account Source 的 `auth_header` 值对应（`Bearer <token>`）。
+### Singapore EC2 部署
 
-先在目标机运行二进制并使用 HTTPS 域名做以下只读契约检查：
+目标实例仅允许 loopback listener；以 Caddy 或 Nginx 在公开 HTTPS hostname 上反代到
+`127.0.0.1:8091`。1Exchange 会拒绝 loopback、私网、重定向和非 HTTPS 的 Remote
+Account Source。反代必须保留 Authorization header，并设置长期 SSE read timeout。
+
+```ini
+# /etc/systemd/system/bullet-live.service
+[Unit]
+Description=Bullet lab-0334 target account
+After=network-online.target
+Wants=network-online.target
+
+[Service]
+User=bullet
+Group=bullet
+ExecStart=/opt/bullet/bullet-live serve /etc/bullet/lab0334.toml
+Restart=always
+RestartSec=2
+NoNewPrivileges=true
+PrivateTmp=true
+ProtectSystem=strict
+ReadWritePaths=/var/lib/bullet
+
+[Install]
+WantedBy=multi-user.target
+```
+
+After installing a checksum-verified release binary and fresh Parquet files:
 
 ```bash
+sudo systemctl daemon-reload
+sudo systemctl enable --now bullet-live
 curl -fsS -H "Authorization: Bearer $(< /etc/bullet/remote-account.token)" \
-  https://bullet-live.example.com/api/accounts
+  https://<bullet-host>/api/accounts
 curl -fsS -H "Authorization: Bearer $(< /etc/bullet/remote-account.token)" \
-  'https://bullet-live.example.com/api/positions?account_id=BULLET%2Flab0344-sim'
+  'https://<bullet-host>/api/positions?account_id=BULLET%2Flab0334-sim'
 ```
 
-再以拥有者的 1Exchange access token 注册来源（令牌内容不写入 shell 历史或仓库）：
+The endpoint returns finite signed positions. Gross futures exposure is
+`notional_value`; `valuation` is the NAV-additive unrealized PnL, so a Fund
+does not mistake gross contract exposure for account equity.
+
+### 1Exchange Remote Account Source
+
+After the public HTTPS endpoint has passed its contract tests, register it with an owner access
+token held outside the repository:
 
 ```bash
 curl -fsS -X POST "$ONE_EXCHANGE_URL/api/custom-account-sources" \
   -H "Authorization: Bearer $ONE_EXCHANGE_TOKEN" \
   -H 'Content-Type: application/json' \
-  --data '{"name":"Bullet lab-0344 simulated target","base_url":"https://bullet-live.example.com","auth_header":"Bearer <remote-account-token>","enabled":true}'
-curl -fsS -H "Authorization: Bearer $ONE_EXCHANGE_TOKEN" \
-  "$ONE_EXCHANGE_URL/api/accounts"
+  --data '{"name":"Bullet lab-0334 simulated target","base_url":"https://<bullet-host>","auth_header":"Bearer <remote-account-token>","enabled":true}'
 ```
 
-`<remote-account-token>` 应由安全的部署工具代入，不要将它粘贴到配置、文档或终端历史。
-注册后还要从 1Exchange 读取该 AccountID 的 `/api/positions`，检查 CNY 汇率覆盖后才能将
-它用于 Fund；本运行器不提供成交历史端点，因此不支持 1Exchange 复盘。
+Then verify the discovered `BULLET/lab0334-sim` account through the local 1Exchange
+`/api/accounts` and `/api/positions` endpoints. This source intentionally does not provide
+`/api/account-history`, so it is for current target monitoring rather than fill replay.
 
-Bullet is a Rust product for deterministic strategy backtests.
+## Backtest CLI
 
-Its public boundary is deliberately small:
-
-- **`bullet` crate**: the stable API used by a Rust strategy source file.
-- **`bullet` CLI**: compiles that source file together with the crate, creates a runnable strategy executable, and runs it against a versioned TOML configuration.
-
-The internal workspace crates are implementation details.
-
-## Run a strategy
+Bullet also provides its existing deterministic Rust backtest CLI:
 
 ```bash
 cargo run --release -p bullet-cli -- run examples/dual_ma.rs --config configs/im8888.toml
-```
-
-The CLI creates a cached, release-mode `bullet-strategy` executable, prints its location, and runs it. A strategy file therefore remains a normal Rust source file: no Python, no interpreter, no user-managed Cargo workspace.
-
-## Strategy API
-
-A strategy exposes one public factory named `strategy` and implements `bullet::Strategy`.
-
-```rust
-use bullet::{BarContext, Order, Strategy};
-
-pub struct BuyOnce;
-
-pub fn strategy() -> BuyOnce { BuyOnce }
-
-impl Strategy for BuyOnce {
-    fn on_bar(&mut self, context: BarContext<'_>) -> Order {
-        if context.position == 0 { Order::Buy(1) } else { Order::Close }
-    }
-}
-```
-
-`on_bar` executes after all previously submitted orders for that instrument are filled at the new bar open. It may return `Order::None`, `Order::Buy(quantity)`, `Order::Sell(quantity)`, or `Order::Close`. The order becomes pending and fills at the **next bar open**. Positions may be long, flat, or short: buys increase the position, sells decrease it, and `Order::Close` submits the opposing quantity required to flatten it.
-
-## Backtest configuration
-
-Use one TOML file to separate research assumptions from the strategy alpha:
-
-```toml
-version = 1
-
-[backtest]
-mode = "bar"
-initial_cash = 1_000_000.0
-currency = "CNY"
-
-[execution]
-fill_price = "next_bar_open"
-slippage_bps = 1.0
-
-[fees]
-mode = "per_contract"
-open = 2.3
-close = 2.3
-
-[[instruments]]
-id = "IM8888"
-data = "~/.quant-data/IM8888.parquet"
-multiplier = 200.0
-margin_rate = 0.12
-tick_size = 0.2
-```
-
-Add another `[[instruments]]` table for every data file. Bullet merges bars deterministically by timestamp then instrument ID and invokes the strategy once per bar. Relative data paths are resolved from the configuration file; `~` resolves to the current user home directory.
-
-Version 1 accepts only `mode = "bar"`, `fill_price = "next_bar_open"`, and `fees.mode = "per_contract"`. An order that increases absolute exposure is rejected if the resulting portfolio initial-margin requirement exceeds current account equity. Existing positions use their latest close; the filling instrument uses its fill price. Open and close fees apply by the exposure that each fill opens or closes. This makes unsupported tick, same-bar, or custom-fee behavior impossible rather than silently applying a different model.
-
-## Evaluation output
-
-Every run reports a single Bullet-defined record: data bytes, bars, runtime, peak RSS, fills, unfilled final-bar orders, round trips, costs, final position per instrument, cumulative return, CAGR, daily UTC equity Sharpe, maximum drawdown, and CAGR / absolute maximum drawdown. Orders submitted on an instrument’s last bar remain pending because no next-bar open exists; they are reported, but do not affect fills, positions, or performance.
-
-The version-1 equity model uses configured multipliers, zero risk-free rate, `sqrt(252)` Sharpe annualization, configured per-contract fees and adverse basis-point slippage. It does not yet model intraday margin calls, close-today fees, funding, borrow, corporate actions, or tick/level-2 execution.
-
-## Development
-
-```bash
-cargo fmt --check
-cargo test --workspace
-cargo clippy --workspace --all-targets -- -D warnings
 ```

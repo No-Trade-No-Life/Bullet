@@ -62,7 +62,7 @@ async fn positions(
     Ok(Json(
         targets
             .iter()
-            .map(|target| Position::from_target(&state.account_id, target))
+            .filter_map(|target| Position::from_target(&state.account_id, target))
             .collect(),
     ))
 }
@@ -111,14 +111,23 @@ struct Position {
 }
 
 impl Position {
-    fn from_target(account_id: &str, target: &TargetPosition) -> Self {
-        let amount = target.contracts as f64;
-        let notional_value = amount.abs() * target.latest_price * target.multiplier;
+    fn from_target(account_id: &str, target: &TargetPosition) -> Option<Self> {
+        let amount = target.contracts;
+        let notional_value = amount * target.latest_price * target.multiplier;
         let floating_profit =
             (target.latest_price - target.entry_price) * amount * target.multiplier;
-        Self {
+        if !amount.is_finite()
+            || !target.entry_price.is_finite()
+            || !target.latest_price.is_finite()
+            || !target.multiplier.is_finite()
+            || !notional_value.is_finite()
+            || !floating_profit.is_finite()
+        {
+            return None;
+        }
+        Some(Self {
             position_id: format!("BULLET/FUTURES/{}", target.symbol),
-            product_id: format!("BULLET/FUTURES/{}", target.ctpd_instrument_id),
+            product_id: format!("BULLET/FUTURES/{}", target.target_instrument_id),
             account_id: account_id.to_owned(),
             updated_at: target.updated_at_ms,
             base_currency: Some(target.symbol.clone()),
@@ -130,17 +139,16 @@ impl Position {
             notional_value,
             notional_currency: Some("CNY".into()),
             settlement_currency: "CNY".into(),
-            notional: (if amount.is_sign_negative() {
-                -notional_value
-            } else {
-                notional_value
-            })
-            .to_string(),
+            notional: notional_value.to_string(),
+            // Futures exposure is not cash equity. 1Exchange values derivative
+            // positions by the NAV-additive unrealized PnL instead of the
+            // gross notional, which would otherwise overstate this target-only
+            // simulated account by several orders of magnitude.
             valuation: floating_profit,
             floating_profit,
-            comment: "lab-0344 process_exception_not_freezable; simulated target only".into(),
+            comment: "lab-0334 trusted baseline; simulated target only, no order-routing".into(),
             margin: None,
-        }
+        })
     }
 }
 
@@ -149,51 +157,19 @@ mod tests {
     use std::sync::{Arc, RwLock};
 
     use axum::{body::Body, http::Request};
-    use chrono::{Duration, NaiveDateTime};
     use tower::ServiceExt;
 
-    use super::{RemoteAccountState, app};
-    use crate::{
-        config::InstrumentConfig,
-        model::{CtpdTick, Lab0344Model, Portfolio},
-    };
+    use super::{Position, RemoteAccountState, app};
+    use crate::model::{Portfolio, TargetPosition};
 
     fn seeded_portfolio() -> Arc<RwLock<Portfolio>> {
-        let config = InstrumentConfig {
-            symbol: "IF".into(),
-            ctpd_instrument_id: "IF2609".into(),
-            parquet: "/unused".into(),
-            target_contracts: 1,
-            contract_multiplier: 300.0,
-            session_bar_count: 240,
-            last_executable_signal_time: "14:40:00".into(),
-        };
-        let model = Lab0344Model::new(&config);
-        let mut portfolio = Portfolio::default();
-        portfolio.insert("IF2609".into(), model);
-        for minute in 0..61 {
-            let at = NaiveDateTime::parse_from_str("20260810 09:30:00", "%Y%m%d %H:%M:%S").unwrap()
-                + Duration::minutes(minute);
-            portfolio
-                .ingest(CtpdTick {
-                    instrument_id: "IF2609".into(),
-                    exchange_id: "CFFEX".into(),
-                    trading_day: at.format("%Y%m%d").to_string(),
-                    action_day: at.format("%Y%m%d").to_string(),
-                    update_time: at.format("%H:%M:%S").to_string(),
-                    update_millisec: 0,
-                    last_price: 4_000.0 + minute as f64,
-                    open_interest: minute as f64 + 1.0,
-                })
-                .unwrap();
-        }
-        Arc::new(RwLock::new(portfolio))
+        Arc::new(RwLock::new(Portfolio::default()))
     }
 
     #[tokio::test]
     async fn remote_protocol_authenticates_and_returns_unknown_account_as_empty() {
         let service = app(RemoteAccountState {
-            account_id: "BULLET/lab0344".into(),
+            account_id: "BULLET/lab0334".into(),
             bearer_token: Some("secret".into()),
             portfolio: seeded_portfolio(),
         });
@@ -220,12 +196,12 @@ mod tests {
         let accounts: serde_json::Value = serde_json::from_slice(&body).unwrap();
         assert_eq!(
             accounts,
-            serde_json::json!([{"account_id":"BULLET/lab0344"}])
+            serde_json::json!([{"account_id":"BULLET/lab0334"}])
         );
         let positions = service
             .clone()
             .oneshot(
-                Request::get("/api/positions?account_id=BULLET%2Flab0344")
+                Request::get("/api/positions?account_id=BULLET%2Flab0334")
                     .header("authorization", "Bearer secret")
                     .body(Body::empty())
                     .unwrap(),
@@ -237,15 +213,7 @@ mod tests {
             .await
             .unwrap();
         let positions: serde_json::Value = serde_json::from_slice(&body).unwrap();
-        assert_eq!(positions[0]["account_id"], "BULLET/lab0344");
-        assert_eq!(positions[0]["amount"], 1.0);
-        assert_eq!(positions[0]["settlement_currency"], "CNY");
-        assert!(
-            positions[0]["floating_profit"]
-                .as_f64()
-                .unwrap()
-                .is_finite()
-        );
+        assert_eq!(positions, serde_json::json!([]));
         let unknown = service
             .oneshot(
                 Request::get("/api/positions?account_id=other")
@@ -260,5 +228,27 @@ mod tests {
             .await
             .unwrap();
         assert_eq!(body, "[]");
+    }
+
+    #[test]
+    fn serializes_short_exposure_and_positive_profit_consistently() {
+        let position = Position::from_target(
+            "BULLET/lab0334",
+            &TargetPosition {
+                symbol: "IF8888".into(),
+                target_instrument_id: "IF2609".into(),
+                exchange_id: "CFFEX".into(),
+                contracts: -3.0,
+                entry_price: 4_000.0,
+                latest_price: 3_990.0,
+                multiplier: 300.0,
+                updated_at_ms: 1,
+            },
+        )
+        .unwrap();
+        assert!(position.amount.is_sign_negative());
+        assert!(position.notional_value.is_sign_negative());
+        assert!(position.valuation.is_sign_positive());
+        assert!(position.floating_profit.is_sign_positive());
     }
 }
