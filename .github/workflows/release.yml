@@ -20,7 +20,7 @@ jobs:
       - run: |
           mkdir -p dist
           cp target/x86_64-unknown-linux-musl/release/bullet-live dist/bullet-live-x86_64-unknown-linux-musl
-          sha256sum dist/bullet-live-x86_64-unknown-linux-musl > dist/bullet-live-x86_64-unknown-linux-musl.sha256
+          (cd dist && sha256sum bullet-live-x86_64-unknown-linux-musl > bullet-live-x86_64-unknown-linux-musl.sha256)
       - uses: actions/upload-artifact@v4
         with:
           name: bullet-live-x86_64-unknown-linux-musl
