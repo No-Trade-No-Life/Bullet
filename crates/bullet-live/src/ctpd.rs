@@ -15,6 +15,9 @@ use crate::{
     model::{CtpdTick, Portfolio},
 };
 
+const KLINE_RECOVERY_CHUNK_MS: i64 = 24 * 60 * 60 * 1_000;
+const KLINE_RECOVERY_TIMEOUT: Duration = Duration::from_secs(30);
+
 /// Runs one reconnecting CTPD SSE consumer. A stale or disconnected stream
 /// clears its target before retrying, so 1Exchange never sees a target backed
 /// by an unknown market state.
@@ -116,42 +119,42 @@ async fn recover_completed_klines(
         .ok_or("cannot recover CTPD Klines before Parquet history is seeded")?;
     let last_ms = ctpd_ms_from_market_ns(last_market_ns)?;
     let now_ms = chrono::Utc::now().timestamp_millis();
-    if now_ms <= 0 || i128::from(now_ms) - i128::from(last_ms) > 72_i128 * 60 * 60 * 1_000 {
-        return Err(
-            "Parquet history is more than 72 hours behind CTPD; refresh it before live inference"
-                .into(),
-        );
+    if now_ms < last_ms {
+        return Err("CTPD clock precedes the seeded Parquet history".into());
     }
-    let url = format!(
-        "{}/v1/klines?instrument_id={}&start_ms={}&end_ms={}&interval_secs=60",
-        ctpd.base_url.trim_end_matches('/'),
-        instrument.market_instrument_id,
-        last_ms,
-        now_ms,
-    );
-    let bytes = client
-        .get(url)
-        .bearer_auth(bearer_token)
-        .send()
-        .await
-        .map_err(|error| format!("Kline recovery request failed: {error}"))?
-        .error_for_status()
-        .map_err(|error| format!("CTPD rejected Kline recovery: {error}"))?
-        .bytes()
-        .await
-        .map_err(|error| format!("cannot read CTPD Kline response: {error}"))?;
-    let mut klines = serde_json::from_slice::<Vec<CtpdKline>>(&bytes)
-        .map_err(|error| format!("invalid CTPD Kline response: {error}"))?;
-    klines.sort_by_key(|kline| kline.start_ms);
     let mut recovered = 0_usize;
-    for kline in klines.into_iter().filter(|kline| kline.closed) {
-        let bar = history_bar_from_kline(kline)?;
-        if portfolio
-            .write()
-            .expect("portfolio lock poisoned")
-            .ingest_recovered_history(&instrument.market_instrument_id, &bar)?
-        {
-            recovered += 1;
+    for (start_ms, end_ms) in kline_recovery_windows(last_ms, now_ms) {
+        let url = format!(
+            "{}/v1/klines?instrument_id={}&start_ms={}&end_ms={}&interval_secs=60",
+            ctpd.base_url.trim_end_matches('/'),
+            instrument.market_instrument_id,
+            start_ms,
+            end_ms,
+        );
+        let bytes = client
+            .get(url)
+            .bearer_auth(bearer_token)
+            .timeout(KLINE_RECOVERY_TIMEOUT)
+            .send()
+            .await
+            .map_err(|error| format!("Kline recovery request failed: {error}"))?
+            .error_for_status()
+            .map_err(|error| format!("CTPD rejected Kline recovery: {error}"))?
+            .bytes()
+            .await
+            .map_err(|error| format!("cannot read CTPD Kline response: {error}"))?;
+        let mut klines = serde_json::from_slice::<Vec<CtpdKline>>(&bytes)
+            .map_err(|error| format!("invalid CTPD Kline response: {error}"))?;
+        klines.sort_by_key(|kline| kline.start_ms);
+        for kline in klines.into_iter().filter(|kline| kline.closed) {
+            let bar = history_bar_from_kline(kline)?;
+            if portfolio
+                .write()
+                .expect("portfolio lock poisoned")
+                .ingest_recovered_history(&instrument.market_instrument_id, &bar)?
+            {
+                recovered += 1;
+            }
         }
     }
     if recovered > 0 {
@@ -161,6 +164,17 @@ async fn recover_completed_klines(
         );
     }
     Ok(())
+}
+
+fn kline_recovery_windows(start_ms: i64, end_ms: i64) -> Vec<(i64, i64)> {
+    let mut windows = Vec::new();
+    let mut cursor = start_ms;
+    while cursor < end_ms {
+        let next = cursor.saturating_add(KLINE_RECOVERY_CHUNK_MS).min(end_ms);
+        windows.push((cursor, next));
+        cursor = next;
+    }
+    windows
 }
 
 fn history_bar_from_kline(kline: CtpdKline) -> Result<HistoryBar, String> {
@@ -291,6 +305,7 @@ mod tests {
 
     use super::{
         CtpdKline, SseDecoder, consume_connection, ctpd_ms_from_market_ns, history_bar_from_kline,
+        kline_recovery_windows,
     };
     use crate::{
         config::{CtpdConfig, InstrumentConfig},
@@ -338,6 +353,20 @@ mod tests {
             .unwrap() as u64;
         assert_eq!(bar.timestamp_ns, expected);
         assert_eq!(ctpd_ms_from_market_ns(expected).unwrap(), start_ms + 60_000);
+    }
+
+    #[test]
+    fn splits_stale_parquet_recovery_into_bounded_daily_windows() {
+        let day = 24 * 60 * 60 * 1_000;
+        assert_eq!(
+            kline_recovery_windows(1_000, 1_000 + 2 * day + 1),
+            vec![
+                (1_000, 1_000 + day),
+                (1_000 + day, 1_000 + 2 * day),
+                (1_000 + 2 * day, 1_000 + 2 * day + 1),
+            ]
+        );
+        assert!(kline_recovery_windows(1_000, 1_000).is_empty());
     }
 
     #[tokio::test]
