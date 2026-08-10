@@ -13,6 +13,20 @@ use parquet::arrow::arrow_reader::ParquetRecordBatchReaderBuilder;
 const DATE_COLUMN: &str = "date";
 const OPEN_COLUMN: &str = "open";
 const CLOSE_COLUMN: &str = "close";
+const OPEN_INTEREST_COLUMN: &str = "open_interest";
+
+/// A historical bar used to seed a live strategy before CTPD ticks take over.
+///
+/// `timestamp_ns` deliberately remains the source's timezone-naive market
+/// timestamp so the live runner can apply the Parquet natural-day convention
+/// at its splice boundary.
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoryBar {
+    pub timestamp_ns: u64,
+    pub open: f64,
+    pub close: f64,
+    pub open_interest: f64,
+}
 
 pub fn read_bars(path: impl AsRef<Path>) -> Result<Vec<Bar>, DataError> {
     let file = File::open(path).map_err(DataError::Open)?;
@@ -30,6 +44,31 @@ pub fn read_bars(path: impl AsRef<Path>) -> Result<Vec<Bar>, DataError> {
     Ok(bars)
 }
 
+/// Reads the newest `maximum` bars required to reconstruct the current
+/// session state. This is startup work only; the live inference hot path never
+/// reads Parquet.
+pub fn read_history_tail(
+    path: impl AsRef<Path>,
+    maximum: usize,
+) -> Result<Vec<HistoryBar>, DataError> {
+    if maximum == 0 {
+        return Err(DataError::EmptyTail);
+    }
+    let file = File::open(path).map_err(DataError::Open)?;
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(DataError::Parquet)?
+        .build()
+        .map_err(DataError::Parquet)?;
+    let mut bars = Vec::new();
+
+    for batch in reader {
+        append_history_batch(&mut bars, &batch.map_err(DataError::Arrow)?)?;
+    }
+    validate_history_timestamps(&bars)?;
+    let start = bars.len().saturating_sub(maximum);
+    Ok(bars.split_off(start))
+}
+
 fn append_batch(bars: &mut Vec<Bar>, batch: &RecordBatch) -> Result<(), DataError> {
     let dates = required_date_column(batch)?;
     let opens = required_f64_column(batch, OPEN_COLUMN)?;
@@ -44,6 +83,39 @@ fn append_batch(bars: &mut Vec<Bar>, batch: &RecordBatch) -> Result<(), DataErro
             CLOSE_COLUMN,
         )?;
         bars.push(Bar::new(timestamp_ns, open, close));
+    }
+
+    Ok(())
+}
+
+fn append_history_batch(bars: &mut Vec<HistoryBar>, batch: &RecordBatch) -> Result<(), DataError> {
+    let dates = required_date_column(batch)?;
+    let opens = required_f64_column(batch, OPEN_COLUMN)?;
+    let closes = required_f64_column(batch, CLOSE_COLUMN)?;
+    let open_interest = required_f64_column(batch, OPEN_INTEREST_COLUMN)?;
+
+    for row in 0..batch.num_rows() {
+        let timestamp_ns = timestamp_ns(required_value(dates, row, DATE_COLUMN)?, row)?;
+        let open = finite(required_value(opens, row, OPEN_COLUMN)?, row, OPEN_COLUMN)?;
+        let close = finite(
+            required_value(closes, row, CLOSE_COLUMN)?,
+            row,
+            CLOSE_COLUMN,
+        )?;
+        let open_interest = finite(
+            required_value(open_interest, row, OPEN_INTEREST_COLUMN)?,
+            row,
+            OPEN_INTEREST_COLUMN,
+        )?;
+        if open <= 0.0 || close <= 0.0 || open_interest < 0.0 {
+            return Err(DataError::InvalidHistoryValue { row });
+        }
+        bars.push(HistoryBar {
+            timestamp_ns,
+            open,
+            close,
+            open_interest,
+        });
     }
 
     Ok(())
@@ -104,6 +176,13 @@ fn price(value: f64, row: usize, column: &'static str) -> Result<Price, DataErro
     Price::new(value).ok_or(DataError::InvalidPrice { column, row, value })
 }
 
+fn finite(value: f64, row: usize, column: &'static str) -> Result<f64, DataError> {
+    value
+        .is_finite()
+        .then_some(value)
+        .ok_or(DataError::InvalidValue { column, row, value })
+}
+
 fn validate_timestamps(bars: &[Bar]) -> Result<(), DataError> {
     for (row, pair) in bars.windows(2).enumerate() {
         if pair[0].timestamp_ns >= pair[1].timestamp_ns {
@@ -111,6 +190,15 @@ fn validate_timestamps(bars: &[Bar]) -> Result<(), DataError> {
         }
     }
 
+    Ok(())
+}
+
+fn validate_history_timestamps(bars: &[HistoryBar]) -> Result<(), DataError> {
+    for (row, pair) in bars.windows(2).enumerate() {
+        if pair[0].timestamp_ns >= pair[1].timestamp_ns {
+            return Err(DataError::NonIncreasingTimestamp { row: row + 1 });
+        }
+    }
     Ok(())
 }
 
@@ -134,6 +222,15 @@ pub enum DataError {
         row: usize,
         value: f64,
     },
+    InvalidValue {
+        column: &'static str,
+        row: usize,
+        value: f64,
+    },
+    InvalidHistoryValue {
+        row: usize,
+    },
+    EmptyTail,
     NonIncreasingTimestamp {
         row: usize,
     },
@@ -161,6 +258,14 @@ impl fmt::Display for DataError {
                     "column `{column}` has invalid price {value} at row {row}"
                 )
             }
+            Self::InvalidValue { column, row, value } => {
+                write!(formatter, "{column} must be finite at row {row}: {value}")
+            }
+            Self::InvalidHistoryValue { row } => write!(
+                formatter,
+                "open, close and open_interest must be positive/finite at row {row}"
+            ),
+            Self::EmptyTail => formatter.write_str("history tail must contain at least one bar"),
             Self::NonIncreasingTimestamp { row } => {
                 write!(
                     formatter,
@@ -182,6 +287,9 @@ impl Error for DataError {
             | Self::NullValue { .. }
             | Self::InvalidTimestamp { .. }
             | Self::InvalidPrice { .. }
+            | Self::InvalidValue { .. }
+            | Self::InvalidHistoryValue { .. }
+            | Self::EmptyTail
             | Self::NonIncreasingTimestamp { .. } => None,
         }
     }
@@ -216,6 +324,7 @@ mod tests {
             ),
             Field::new("open", DataType::Float64, false),
             Field::new("close", DataType::Float64, false),
+            Field::new("open_interest", DataType::Float64, false),
         ]));
         let batch = RecordBatch::try_new(
             schema.clone(),
@@ -223,6 +332,7 @@ mod tests {
                 Arc::new(TimestampNanosecondArray::from(vec![1_i64, 2])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![100.0, 101.0])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![101.0, 102.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![10.0, 11.0])) as ArrayRef,
             ],
         )
         .expect("test batch has a valid schema");
@@ -238,5 +348,48 @@ mod tests {
         assert_eq!(bars[0].timestamp_ns, 1);
         assert_eq!(bars[1].open.value(), 101.0);
         assert_eq!(bars[1].close.value(), 102.0);
+    }
+
+    #[test]
+    fn reads_tail_with_open_interest_for_live_splice() {
+        let path = std::env::temp_dir().join(format!(
+            "bullet-live-history-{}-{}.parquet",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "date",
+                DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+                false,
+            ),
+            Field::new("open", DataType::Float64, false),
+            Field::new("close", DataType::Float64, false),
+            Field::new("open_interest", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(TimestampNanosecondArray::from(vec![1_i64, 2, 3])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![100.0, 101.0, 102.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![101.0, 102.0, 103.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![10.0, 11.0, 12.0])) as ArrayRef,
+            ],
+        )
+        .expect("test batch has a valid schema");
+        let file = File::create(&path).expect("temporary parquet path is writable");
+        let mut writer = ArrowWriter::try_new(file, schema, None).expect("writer initializes");
+        writer.write(&batch).expect("writer accepts batch");
+        writer.close().expect("writer writes footer");
+
+        let bars = super::read_history_tail(&path, 2).expect("history tail is read");
+        std::fs::remove_file(&path).expect("temporary parquet file is removed");
+
+        assert_eq!(bars.len(), 2);
+        assert_eq!(bars[0].timestamp_ns, 2);
+        assert_eq!(bars[1].open_interest, 12.0);
     }
 }
