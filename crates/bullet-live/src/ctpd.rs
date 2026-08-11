@@ -4,7 +4,7 @@ use std::{
 };
 
 use bullet_data::HistoryBar;
-use chrono::{DateTime, FixedOffset, TimeZone, Utc};
+use chrono::{DateTime, FixedOffset, TimeZone, Timelike, Utc};
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
@@ -31,18 +31,31 @@ pub async fn consume_ticks(
     loop {
         let result =
             consume_connection(&client, &ctpd, &bearer_token, &instrument, &portfolio).await;
-        if let Err(error) = result {
+        let expected_lunch_break = is_cffex_lunch_break(Utc::now());
+        if let Err(error) = result
+            && !expected_lunch_break
+        {
             eprintln!(
                 "bullet-live: CTPD feed {}: {error}",
                 instrument.market_instrument_id
             );
         }
-        portfolio
-            .write()
-            .expect("portfolio lock poisoned")
-            .clear_all();
+        if !expected_lunch_break {
+            portfolio
+                .write()
+                .expect("portfolio lock poisoned")
+                .clear_all();
+        }
         sleep(Duration::from_millis(250)).await;
     }
+}
+
+/// lab0334 can hold a virtual leg from the morning into the afternoon session.
+/// CFFEX has no ticks from 11:30 through 12:59 China Standard Time, so that
+/// expected silence cannot invalidate an already synchronized target.
+fn is_cffex_lunch_break(now: DateTime<Utc>) -> bool {
+    let local = now.with_timezone(&FixedOffset::east_opt(8 * 60 * 60).expect("CST offset exists"));
+    (local.hour() == 11 && local.minute() >= 30) || local.hour() == 12
 }
 
 async fn consume_connection(
@@ -300,7 +313,7 @@ mod tests {
         response::IntoResponse,
         routing::get,
     };
-    use chrono::{Duration, NaiveDateTime};
+    use chrono::{Duration, NaiveDateTime, TimeZone, Utc};
     use reqwest::Client;
 
     use super::{
@@ -367,6 +380,16 @@ mod tests {
             ]
         );
         assert!(kline_recovery_windows(1_000, 1_000).is_empty());
+    }
+
+    #[test]
+    fn recognizes_the_cffex_lunch_break() {
+        let at = |hour, minute| Utc.with_ymd_and_hms(2026, 8, 11, hour, minute, 0).unwrap();
+
+        assert!(!super::is_cffex_lunch_break(at(3, 29)));
+        assert!(super::is_cffex_lunch_break(at(3, 30)));
+        assert!(super::is_cffex_lunch_break(at(4, 59)));
+        assert!(!super::is_cffex_lunch_break(at(5, 0)));
     }
 
     #[tokio::test]
