@@ -2,7 +2,7 @@ use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bullet_data::HistoryBar;
 use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
-use serde::Deserialize;
+use serde::{Deserialize, Serialize};
 
 use crate::config::InstrumentConfig;
 
@@ -257,7 +257,11 @@ impl Indicators {
                 Some(slope),
                 Some(gap),
             ) if fast > slow
-                && prev_fast <= prev_slow
+                // pandas rolling means retain a different summation order
+                // from Rust's deque sum.  The conceptual cross treats an
+                // equal prior average as a valid cross, so normalize only
+                // sub-nanobasis-point accumulator noise at this boundary.
+                && prev_fast <= prev_slow + 1e-9
                 && bar.close > trend
                 && slope >= 10.0
                 && gap >= 2.0 =>
@@ -273,7 +277,7 @@ impl Indicators {
                 Some(slope),
                 Some(gap),
             ) if fast < slow
-                && prev_fast >= prev_slow
+                && prev_fast + 1e-9 >= prev_slow
                 && bar.close < trend
                 && slope <= -10.0
                 && gap >= 2.0 =>
@@ -315,7 +319,7 @@ impl Indicators {
 #[derive(Clone, Debug)]
 enum ExitPlan {
     EndOfDay,
-    AtOrAfter(u64),
+    FixedHoldMinutes(u64),
     Conditional,
 }
 
@@ -330,11 +334,69 @@ struct Candidate {
     signal_time_ns: u64,
     entry_time_ns: u64,
     entry_price: f64,
+    prediction: f64,
     exit_plan: ExitPlan,
     ret30_signed: f64,
     ret60_signed: f64,
     vwap_signed: f64,
     trend_distance_bps: f64,
+}
+
+impl Candidate {
+    fn side_name(&self) -> &'static str {
+        match self.side {
+            Side::Long => "long",
+            Side::Short => "short",
+        }
+    }
+
+    fn candidate_policy_id(&self) -> String {
+        format!("{}:{}", self.family, self.policy)
+    }
+}
+
+/// Stable, offline-only evidence for the lab0334 parity gate.  This record is
+/// deliberately emitted by the same arbitrator used by the live process: the
+/// replay command must never grow a second decision implementation.
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CandidateDecision {
+    pub candidate_id: String,
+    pub symbol: String,
+    pub side: String,
+    pub trade_type: String,
+    pub candidate_policy_id: String,
+    pub planned_exit_policy: String,
+    pub prediction_asof_ns: u64,
+    pub prediction_key: String,
+    pub candidate_pred: f64,
+    pub history_count: usize,
+    pub history_max_label_available_ns: Option<u64>,
+    pub decision: String,
+    pub reject_reason: Option<String>,
+    pub active_count: usize,
+    pub used_weight: f64,
+    pub candidate_weight: f64,
+    pub same_symbol_count: usize,
+    pub incumbent_candidate_id: Option<String>,
+    pub incumbent_candidate_policy_id: Option<String>,
+    pub incumbent_pred: Option<f64>,
+    pub replacement_margin: Option<f64>,
+    pub capital_ok: Option<bool>,
+    pub symbol_ok: Option<bool>,
+}
+
+#[derive(Clone, Debug, Deserialize, Serialize)]
+pub struct CandidateLabel {
+    pub candidate_id: String,
+    pub symbol: String,
+    pub side: String,
+    pub trade_type: String,
+    pub candidate_policy_id: String,
+    pub entry_time_ns: u64,
+    pub entry_price: f64,
+    pub label_available_ns: u64,
+    pub exit_price: f64,
+    pub trade_return: f64,
 }
 
 #[derive(Clone, Debug)]
@@ -386,6 +448,8 @@ pub(crate) struct InstrumentModel {
     latest_exchange: String,
     latest_at_ns: Option<u64>,
     bar_opens: VecDeque<(u64, f64)>,
+    recent_ret60: VecDeque<(u64, Option<f64>)>,
+    history_day_bar_counts: BTreeMap<NaiveDate, usize>,
     last_tick_ns: Option<u64>,
     last_cumulative_volume: Option<f64>,
     last_cumulative_turnover: Option<f64>,
@@ -414,6 +478,8 @@ impl InstrumentModel {
             latest_exchange: String::new(),
             latest_at_ns: None,
             bar_opens: VecDeque::new(),
+            recent_ret60: VecDeque::new(),
+            history_day_bar_counts: BTreeMap::new(),
             last_tick_ns: None,
             last_cumulative_volume: None,
             last_cumulative_turnover: None,
@@ -545,15 +611,25 @@ impl InstrumentModel {
         exchange: &str,
     ) -> Result<Vec<ModelEvent>, String> {
         let day = market_day(endpoint_ns)?;
+        let mut events = Vec::new();
         if self
             .last_indicator
             .as_ref()
             .is_some_and(|previous| previous.day != day)
         {
+            let previous = self
+                .last_indicator
+                .as_ref()
+                .expect("previous indicator was checked")
+                .clone();
+            // Historical Parquet includes older sessions whose final
+            // timestamp is 15:15.  lab0334 closes at that day's final bar,
+            // rather than at a hard-coded wall time.  The current CTPD
+            // 240-bar session still closes eagerly at 15:00 below.
+            self.resolve_all_eod(previous.bar.timestamp_ns, previous.bar.open, &mut events);
             self.clear_day();
             self.last_indicator = None;
         }
-        let mut events = Vec::new();
         self.latest_price = Some(open);
         self.latest_exchange = exchange.to_owned();
         self.latest_at_ns = Some(endpoint_ns);
@@ -568,7 +644,7 @@ impl InstrumentModel {
         for draft in pending {
             self.activate_draft(draft, endpoint_ns, open, &mut events)?;
         }
-        if is_session_end(endpoint_ns)? {
+        if is_session_end(endpoint_ns)? && self.day_rows + 1 == self.config.session_bar_count {
             self.resolve_all_eod(endpoint_ns, open, &mut events);
         }
         Ok(events)
@@ -577,6 +653,15 @@ impl InstrumentModel {
     fn complete_bar(&mut self, bar: MarketBar) -> Result<Vec<ModelEvent>, String> {
         self.day_rows += 1;
         let indicator = self.indicators.push(bar)?;
+        self.recent_ret60
+            .push_back((indicator.bar.timestamp_ns, indicator.ret60_bps));
+        // A CTPD series can lag another symbol by more than a few minutes
+        // during recovery.  Retain the full longest historical session so
+        // ordinary-idle's cross-symbol gate can still query its exact signal
+        // timestamp once the portfolio watermark catches up.
+        while self.recent_ret60.len() > 400 {
+            self.recent_ret60.pop_front();
+        }
         let events = Vec::new();
         self.evaluate_base_exit(&indicator);
         self.maybe_schedule_addon(&indicator);
@@ -648,6 +733,7 @@ impl InstrumentModel {
             signal_time_ns: draft.signal_time_ns,
             entry_time_ns: at_ns,
             entry_price: open,
+            prediction: 0.0,
             exit_plan: draft.exit_plan,
             ret30_signed: draft.ret30_signed,
             ret60_signed: draft.ret60_signed,
@@ -684,8 +770,8 @@ impl InstrumentModel {
         }
         let mut pending = Vec::new();
         for leg in self.overlays.drain(..) {
-            let due =
-                matches!(leg.candidate.exit_plan, ExitPlan::AtOrAfter(target) if at_ns >= target);
+            let due = matches!(leg.candidate.exit_plan, ExitPlan::FixedHoldMinutes(minutes)
+                if at_ns >= leg.candidate.entry_time_ns.saturating_add(minutes.saturating_mul(NS_PER_MINUTE)));
             if due {
                 label_event(leg.candidate, open, at_ns, events);
             } else {
@@ -725,8 +811,26 @@ impl InstrumentModel {
             base.exit_next_open = true;
             return;
         }
-        let bars_to_close = self.config.session_bar_count.saturating_sub(self.day_rows);
+        let session_bar_count = self
+            .history_day_bar_counts
+            .get(&row.day)
+            .copied()
+            .unwrap_or(self.config.session_bar_count);
+        let bars_to_close = session_bar_count.saturating_sub(self.day_rows);
         let bad = bad_late_state(row, &base.candidate, bars_to_close);
+        if let Some(confirm) = base.delayed_bad_at_row {
+            if self.day_rows < confirm {
+                return;
+            }
+            // The conceptual model evaluates precisely the fifth later bar.
+            // A failed confirmation clears the pending trigger rather than
+            // carrying it into any later, unrelated bad-state observation.
+            base.delayed_bad_at_row = None;
+            if bad {
+                base.exit_next_open = true;
+            }
+            return;
+        }
         if !bad {
             return;
         }
@@ -734,14 +838,8 @@ impl InstrumentModel {
             && base.candidate.side == Side::Short
             && (16..=30).contains(&bars_to_close)
         {
-            match base.delayed_bad_at_row {
-                None => {
-                    base.delayed_bad_at_row = Some(self.day_rows + 5);
-                    return;
-                }
-                Some(confirm) if self.day_rows < confirm => return,
-                Some(_) => base.delayed_bad_at_row = None,
-            }
+            base.delayed_bad_at_row = Some(self.day_rows + 5);
+            return;
         }
         base.exit_next_open = true;
     }
@@ -750,7 +848,8 @@ impl InstrumentModel {
         let Some(base) = self.base.as_ref() else {
             return;
         };
-        if self.addon.is_some()
+        if base.exit_next_open
+            || self.addon.is_some()
             || base.candidate.weight != BASE_WEIGHT
             || row.bar.timestamp_ns <= base.candidate.entry_time_ns
         {
@@ -815,7 +914,7 @@ impl InstrumentModel {
                     policy: "early_pullback_h45_open",
                     weight: 0.30,
                     signal_time_ns: row.bar.timestamp_ns,
-                    exit_plan: ExitPlan::AtOrAfter(row.bar.timestamp_ns + 46 * NS_PER_MINUTE),
+                    exit_plan: ExitPlan::FixedHoldMinutes(45),
                     ret30_signed: ret5,
                     ret60_signed: row.ret30_bps.unwrap_or(0.0),
                     vwap_signed: vwap,
@@ -837,6 +936,12 @@ impl InstrumentModel {
                 None
             };
             if let Some(side) = side {
+                // The Python generator stops at the first ordinary-idle
+                // directional signal for the symbol/day, including a signal
+                // rejected by its range, IF/IM relaxation or sync-dispersion
+                // gate.  Retrying later minutes would create a candidate the
+                // reference never creates.
+                self.overlay_seen = true;
                 let signed_range = if side == Side::Long {
                     row.range_pos
                 } else {
@@ -846,7 +951,6 @@ impl InstrumentModel {
                     && !(matches!(self.config.symbol.as_str(), "IF8888" | "IM8888")
                         && ret30 * side.sign() >= 80.0)
                 {
-                    self.overlay_seen = true;
                     self.pending.push(Draft {
                         side,
                         family: "idle_overlay",
@@ -887,7 +991,7 @@ impl InstrumentModel {
                     policy: "trend_recovery_h45_open",
                     weight: 0.25,
                     signal_time_ns: row.bar.timestamp_ns,
-                    exit_plan: ExitPlan::AtOrAfter(row.bar.timestamp_ns + 46 * NS_PER_MINUTE),
+                    exit_plan: ExitPlan::FixedHoldMinutes(45),
                     ret30_signed: ret15 * side.sign(),
                     ret60_signed: ret60 * side.sign(),
                     vwap_signed: vwap * side.sign(),
@@ -920,7 +1024,7 @@ impl InstrumentModel {
                         policy: "im_day120_140_h45_open",
                         weight: 0.30,
                         signal_time_ns: row.bar.timestamp_ns,
-                        exit_plan: ExitPlan::AtOrAfter(row.bar.timestamp_ns + 46 * NS_PER_MINUTE),
+                        exit_plan: ExitPlan::FixedHoldMinutes(45),
                         ret30_signed: 0.0,
                         ret60_signed: 0.0,
                         vwap_signed: 0.0,
@@ -974,6 +1078,7 @@ impl InstrumentModel {
         self.last_cumulative_volume = None;
         self.last_cumulative_turnover = None;
         self.bar_opens.clear();
+        self.recent_ret60.clear();
     }
 
     fn clear_live_state(&mut self) {
@@ -1031,6 +1136,24 @@ impl InstrumentModel {
             .iter()
             .find_map(|(time, price)| (*time == timestamp_ns).then_some(*price))
     }
+
+    fn ret60_at(&self, timestamp_ns: u64) -> Option<f64> {
+        self.recent_ret60
+            .iter()
+            .find_map(|(time, value)| (*time == timestamp_ns).then_some(*value))
+            .flatten()
+    }
+
+    fn set_history_day_bar_counts(&mut self, bars: &[HistoryBar]) -> Result<(), String> {
+        self.history_day_bar_counts.clear();
+        for bar in bars {
+            *self
+                .history_day_bar_counts
+                .entry(market_day(bar.timestamp_ns)?)
+                .or_default() += 1;
+        }
+        Ok(())
+    }
 }
 
 #[derive(Default)]
@@ -1039,13 +1162,42 @@ struct Arbitrator {
     histories: BTreeMap<String, Vec<(u64, f64)>>,
     idle_histories: BTreeMap<String, Vec<f64>>,
     pending_labels: BTreeMap<u64, Vec<(Candidate, f64)>>,
+    capture_ledger: bool,
+    decisions: Vec<CandidateDecision>,
+    labels: Vec<CandidateLabel>,
 }
 
 impl Arbitrator {
+    fn set_capture_ledger(&mut self, capture_ledger: bool) {
+        self.capture_ledger = capture_ledger;
+        self.decisions.clear();
+        self.labels.clear();
+    }
+
+    fn record_decision(&mut self, decision: CandidateDecision) {
+        if self.capture_ledger {
+            self.decisions.push(decision);
+        }
+    }
+
     fn resolve_label(&mut self, candidate: Candidate, exit_price: f64, at_ns: u64) {
         self.active.remove(&candidate.id);
         let trade_return =
             candidate.side.raw_return(candidate.entry_price, exit_price) - ROUND_TRIP_COST;
+        if self.capture_ledger {
+            self.labels.push(CandidateLabel {
+                candidate_id: candidate.id.clone(),
+                symbol: candidate.symbol.clone(),
+                side: candidate.side_name().into(),
+                trade_type: candidate.family.into(),
+                candidate_policy_id: candidate.candidate_policy_id(),
+                entry_time_ns: candidate.entry_time_ns,
+                entry_price: candidate.entry_price,
+                label_available_ns: at_ns,
+                exit_price,
+                trade_return,
+            });
+        }
         self.pending_labels
             .entry(at_ns)
             .or_default()
@@ -1054,17 +1206,55 @@ impl Arbitrator {
 
     fn decide(
         &mut self,
-        candidate: Candidate,
+        mut candidate: Candidate,
         replacement_prices: &BTreeMap<String, f64>,
     ) -> Option<(Candidate, f64)> {
         self.mature_before(candidate.entry_time_ns);
-        let (prediction, _) = self.predict(&candidate);
-        if prediction <= 0.0
-            || self.recovery_gate(&candidate, prediction)
-            || self.idle_gate(&candidate)
-        {
+        let (prediction, history_count, prediction_key, history_max_label_available_ns) =
+            self.predict(&candidate);
+        let mut decision = CandidateDecision {
+            candidate_id: candidate.id.clone(),
+            symbol: candidate.symbol.clone(),
+            side: candidate.side_name().into(),
+            trade_type: candidate.family.into(),
+            candidate_policy_id: candidate.candidate_policy_id(),
+            planned_exit_policy: candidate.policy.into(),
+            prediction_asof_ns: candidate.entry_time_ns,
+            prediction_key,
+            candidate_pred: prediction,
+            history_count,
+            history_max_label_available_ns,
+            decision: "rejected".into(),
+            reject_reason: None,
+            active_count: 0,
+            used_weight: 0.0,
+            candidate_weight: portfolio_weight(&candidate),
+            same_symbol_count: 0,
+            incumbent_candidate_id: None,
+            incumbent_candidate_policy_id: None,
+            incumbent_pred: None,
+            replacement_margin: None,
+            capital_ok: None,
+            symbol_ok: None,
+        };
+        if prediction <= 0.0 {
+            decision.reject_reason = Some("prediction_non_positive".into());
+            self.record_decision(decision);
             return None;
         }
+        if self.recovery_gate(&candidate, prediction) {
+            decision.reject_reason = Some("recovery_weak_nearvwap_gate".into());
+            self.record_decision(decision);
+            return None;
+        }
+        if self.idle_gate(&candidate) {
+            decision.reject_reason = Some("idle_midheat_gate".into());
+            self.record_decision(decision);
+            return None;
+        }
+        // Python stores this entry-time value in `_parallel_pred`; later
+        // labels must not re-score an incumbent during replacement.
+        candidate.prediction = prediction;
         let used = self.active.values().map(portfolio_weight).sum::<f64>();
         let same_symbol = self
             .active
@@ -1073,11 +1263,20 @@ impl Arbitrator {
             .map(|active| active.id.clone())
             .collect::<Vec<_>>();
         let candidate_weight = portfolio_weight(&candidate);
-        if same_symbol.is_empty() && used + candidate_weight <= 1.0 + 1e-12 {
+        let same_symbol_is_empty = same_symbol.is_empty();
+        decision.active_count = self.active.len();
+        decision.used_weight = used;
+        decision.candidate_weight = candidate_weight;
+        decision.same_symbol_count = same_symbol.len();
+        if same_symbol_is_empty && used + candidate_weight <= 1.0 + 1e-12 {
             self.active.insert(candidate.id.clone(), candidate);
+            decision.decision = "accepted".into();
+            decision.capital_ok = Some(true);
+            decision.symbol_ok = Some(true);
+            self.record_decision(decision);
             return None;
         }
-        let pool = if same_symbol.is_empty() {
+        let pool = if same_symbol_is_empty {
             self.active
                 .values()
                 .map(|active| active.id.clone())
@@ -1085,37 +1284,66 @@ impl Arbitrator {
         } else {
             same_symbol
         };
-        let incumbent_id = pool.into_iter().min_by(|left, right| {
+        let Some(incumbent_id) = pool.into_iter().min_by(|left, right| {
             let left_score = self
                 .active
                 .get(left)
-                .map(|value| self.predict(value).0)
+                .map(|value| value.prediction)
                 .unwrap_or(0.0);
             let right_score = self
                 .active
                 .get(right)
-                .map(|value| self.predict(value).0)
+                .map(|value| value.prediction)
                 .unwrap_or(0.0);
             left_score.total_cmp(&right_score)
-        })?;
+        }) else {
+            decision.reject_reason = Some("capital_or_symbol_blocked_without_incumbent".into());
+            decision.capital_ok = Some(used + candidate_weight <= 1.0 + 1e-12);
+            decision.symbol_ok = Some(true);
+            self.record_decision(decision);
+            return None;
+        };
         let incumbent = self.active.get(&incumbent_id).expect("incumbent exists");
-        let incumbent_prediction = self.predict(incumbent).0;
+        let incumbent_prediction = incumbent.prediction;
         let after_replace = used - portfolio_weight(incumbent) + candidate_weight;
         let idle_release = candidate.policy == "ordinary_idle_eod_open"
             && candidate.side == Side::Long
+            && matches!(market_hour(candidate.entry_time_ns), Ok(13 | 14))
             && self.active.len() >= 2
+            && same_symbol_is_empty
             && candidate.vwap_signed >= 80.0
             && candidate.ret60_signed <= 100.0
             && prediction >= 0.001
             && prediction >= incumbent_prediction;
         let margin = if idle_release { 0.0 } else { 0.002 };
-        if after_replace <= 1.0 + 1e-12 && prediction >= incumbent_prediction + margin {
-            let price = replacement_prices.get(&incumbent.symbol).copied()?;
+        let capital_ok = after_replace <= 1.0 + 1e-12;
+        let symbol_ok = true;
+        decision.incumbent_candidate_id = Some(incumbent.id.clone());
+        decision.incumbent_candidate_policy_id = Some(incumbent.candidate_policy_id());
+        decision.incumbent_pred = Some(incumbent_prediction);
+        decision.replacement_margin = Some(margin);
+        decision.capital_ok = Some(capital_ok);
+        decision.symbol_ok = Some(symbol_ok);
+        if !capital_ok {
+            decision.reject_reason = Some("replacement_capital_blocked".into());
+            self.record_decision(decision);
+            return None;
+        }
+        if prediction < incumbent_prediction + margin {
+            decision.reject_reason = Some("replacement_margin_not_met".into());
+            self.record_decision(decision);
+            return None;
+        }
+        if let Some(price) = replacement_prices.get(&incumbent.symbol).copied() {
             let incumbent = incumbent.clone();
             self.active.remove(&incumbent_id);
             self.active.insert(candidate.id.clone(), candidate);
+            decision.decision = "accepted".into();
+            self.record_decision(decision);
             return Some((incumbent, price));
         }
+        decision.reject_reason = Some("replacement_execution_price_missing".into());
+        self.record_decision(decision);
         None
     }
 
@@ -1125,45 +1353,65 @@ impl Arbitrator {
             .range(..as_of_ns)
             .map(|(time, _)| *time)
             .collect::<Vec<_>>();
+        let mut labels = Vec::new();
         for time in keys {
-            let labels = self
+            let pending = self
                 .pending_labels
                 .remove(&time)
                 .expect("pending label key exists");
-            for (candidate, value) in labels {
-                for key in candidate_keys(&candidate) {
-                    self.histories.entry(key).or_default().push((time, value));
-                }
-                if candidate.policy == "ordinary_idle_eod_open" {
-                    self.idle_histories
-                        .entry(idle_key(&candidate))
-                        .or_default()
-                        .push(value * candidate.weight);
-                }
+            labels.extend(
+                pending
+                    .into_iter()
+                    .map(|(candidate, value)| (time, candidate, value)),
+            );
+        }
+        // pandas filters mature rows from its globally entry-ordered
+        // candidate table.  It does not use label availability as the tie
+        // order, so an early-exit later candidate must remain after an older
+        // EOD candidate when both first mature at this decision.
+        labels.sort_by(|(_, left, _), (_, right, _)| {
+            left.entry_time_ns
+                .cmp(&right.entry_time_ns)
+                .then_with(|| left.family.cmp(right.family))
+                .then_with(|| left.symbol.cmp(&right.symbol))
+                .then_with(|| candidate_source_order(left).cmp(&candidate_source_order(right)))
+                .then_with(|| left.id.cmp(&right.id))
+        });
+        for (time, candidate, value) in labels {
+            // `active` represents exactly Python's
+            // `entry_time <= t < exit_time` set.  A mature label is
+            // necessarily outside that interval, including a historical
+            // session finalized on its next-day boundary.
+            self.active.remove(&candidate.id);
+            for key in candidate_keys(&candidate) {
+                self.histories.entry(key).or_default().push((time, value));
+            }
+            if candidate.policy == "ordinary_idle_eod_open" {
+                self.idle_histories
+                    .entry(idle_key(&candidate))
+                    .or_default()
+                    .push(value * candidate.weight);
             }
         }
     }
 
-    fn predict(&self, candidate: &Candidate) -> (f64, usize) {
+    fn predict(&self, candidate: &Candidate) -> (f64, usize, String, Option<u64>) {
         for key in candidate_keys(candidate) {
             let values = self.histories.get(&key).map(Vec::as_slice).unwrap_or(&[]);
             if values.len() >= 20 || key == "global" {
-                let recent = values
-                    .iter()
-                    .rev()
-                    .take(250)
-                    .map(|(_, value)| *value)
-                    .collect::<Vec<_>>();
+                let recent = values.iter().rev().take(250).copied().collect::<Vec<_>>();
                 if recent.is_empty() {
-                    return (0.0, 0);
+                    return (0.0, 0, key, None);
                 }
                 return (
-                    recent.iter().sum::<f64>() / recent.len() as f64,
+                    recent.iter().map(|(_, value)| *value).sum::<f64>() / recent.len() as f64,
                     values.len(),
+                    key,
+                    recent.iter().map(|(time, _)| *time).max(),
                 );
             }
         }
-        (0.0, 0)
+        (0.0, 0, "global".into(), None)
     }
 
     fn recovery_gate(&self, candidate: &Candidate, prediction: f64) -> bool {
@@ -1211,6 +1459,21 @@ impl Portfolio {
         InstrumentModel::new(config)
     }
 
+    pub fn set_capture_ledger(&mut self, capture_ledger: bool) {
+        self.arbitrator.set_capture_ledger(capture_ledger);
+    }
+
+    pub fn set_history_day_bar_counts(
+        &mut self,
+        market_instrument_id: &str,
+        bars: &[HistoryBar],
+    ) -> Result<(), String> {
+        self.models
+            .get_mut(market_instrument_id)
+            .ok_or_else(|| format!("no configured model for history {market_instrument_id}"))?
+            .set_history_day_bar_counts(bars)
+    }
+
     pub fn ingest(&mut self, tick: CtpdTick) -> Result<(), String> {
         let id = tick.instrument_id.clone();
         let events = self
@@ -1218,7 +1481,7 @@ impl Portfolio {
             .get_mut(&id)
             .ok_or_else(|| format!("no configured model for CTPD instrument {id}"))?
             .ingest_tick(tick)?;
-        self.apply(events);
+        self.apply(events, true);
         Ok(())
     }
 
@@ -1232,8 +1495,17 @@ impl Portfolio {
             .get_mut(market_instrument_id)
             .ok_or_else(|| format!("no configured model for history {market_instrument_id}"))?
             .ingest_history(bar)?;
-        self.apply(events);
+        // The Parquet seed is merged externally by timestamp.  Deferring
+        // arbitration until that group is complete preserves Python's
+        // same-entry-time reserve batch and `trade_type, symbol, trade_id`
+        // ordering without changing live tick processing.
+        self.apply(events, false);
         Ok(())
+    }
+
+    pub fn flush_history_candidates(&mut self) {
+        self.flush_candidates();
+        self.publish_targets();
     }
 
     /// Kline recovery has an overlap with the Parquet splice and may be
@@ -1266,7 +1538,7 @@ impl Portfolio {
         Ok(())
     }
 
-    fn apply(&mut self, events: Vec<ModelEvent>) {
+    fn apply(&mut self, events: Vec<ModelEvent>, flush_candidates: bool) {
         for event in events {
             match event {
                 ModelEvent::Candidate(candidate) => self
@@ -1282,25 +1554,20 @@ impl Portfolio {
                 ModelEvent::Price => {}
             }
         }
-        self.flush_candidates();
+        if flush_candidates {
+            self.flush_candidates();
+        }
         self.publish_targets();
     }
 
     fn flush_candidates(&mut self) {
-        let Some(watermark) = self
-            .models
-            .values()
-            .map(|model| model.latest_at_ns)
-            .collect::<Option<Vec<_>>>()
-            .and_then(|times| times.into_iter().min())
-        else {
-            return;
-        };
-        let due = self
-            .pending_candidates
-            .range(..=watermark)
-            .map(|(time, _)| *time)
-            .collect::<Vec<_>>();
+        // Candidate time, not the slowest market feed, is the lab0334
+        // decision clock.  Python's ordered candidate ledger permits a
+        // symbol to trade when another continuous series has no bar at that
+        // timestamp.  Waiting for a four-market watermark delays decisions
+        // across a date boundary and changes both the cross-symbol gate and
+        // the available-label history.
+        let due = self.pending_candidates.keys().copied().collect::<Vec<_>>();
         for time in due {
             let mut candidates = self
                 .pending_candidates
@@ -1310,21 +1577,20 @@ impl Portfolio {
                 left.family
                     .cmp(right.family)
                     .then_with(|| left.symbol.cmp(&right.symbol))
+                    .then_with(|| candidate_source_order(left).cmp(&candidate_source_order(right)))
                     .then_with(|| left.id.cmp(&right.id))
             });
             self.apply_base_dynamic_reserve(&mut candidates);
             for candidate in candidates {
-                if !self.ordinary_idle_sync_blocked(&candidate) {
-                    let entry_time = candidate.entry_time_ns;
-                    let prices = self.open_prices_at(entry_time);
-                    if let Some((incumbent, exit_price)) =
-                        self.arbitrator.decide(candidate, &prices)
-                    {
-                        self.cancel_candidate(&incumbent.id);
-                        self.arbitrator
-                            .resolve_label(incumbent, exit_price, entry_time);
-                    }
+                if self.ordinary_idle_sync_blocked(&candidate) {
+                    // Python omits this candidate before the arbitration
+                    // ledger.  Removing its virtual leg also prevents a
+                    // nonexistent candidate label from contaminating history.
+                    self.cancel_candidate(&candidate.id);
+                    continue;
                 }
+                let prices = self.open_prices_at(candidate.entry_time_ns);
+                let _ = self.arbitrator.decide(candidate, &prices);
             }
         }
     }
@@ -1378,9 +1644,7 @@ impl Portfolio {
         let values = self
             .models
             .values()
-            .filter_map(|model| model.last_indicator.as_ref())
-            .filter(|indicator| indicator.bar.timestamp_ns == candidate.signal_time_ns)
-            .filter_map(|indicator| indicator.ret60_bps)
+            .filter_map(|model| model.ret60_at(candidate.signal_time_ns))
             .collect::<Vec<_>>();
         if values.len() < 2
             || values
@@ -1440,6 +1704,14 @@ impl Portfolio {
         self.targets.values().cloned().collect()
     }
 
+    pub fn candidate_decisions(&self) -> &[CandidateDecision] {
+        &self.arbitrator.decisions
+    }
+
+    pub fn candidate_labels(&self) -> &[CandidateLabel] {
+        &self.arbitrator.labels
+    }
+
     pub fn model_count(&self) -> usize {
         self.models.len()
     }
@@ -1459,7 +1731,8 @@ impl Portfolio {
             signal_time_ns: 0,
             entry_time_ns: 0,
             entry_price: 4_000.0,
-            exit_plan: ExitPlan::AtOrAfter(u64::MAX),
+            prediction: 0.0,
+            exit_plan: ExitPlan::FixedHoldMinutes(u64::MAX),
             ret30_signed: 0.0,
             ret60_signed: 0.0,
             vwap_signed: 0.0,
@@ -1504,6 +1777,21 @@ fn candidate_keys(candidate: &Candidate) -> Vec<String> {
     ]
 }
 
+/// `generate_parallel_overlay_candidates()` allocates its trade ids in this
+/// per-symbol policy order before the final arbitration sort.  It matters
+/// only when two overlay candidates share an entry timestamp and is also the
+/// stable ordering for labels that mature together.
+fn candidate_source_order(candidate: &Candidate) -> u8 {
+    match candidate.policy {
+        "if_vwap_confirm_eod_open" => 0,
+        "early_pullback_h45_open" => 1,
+        "im_day120_140_h45_open" => 2,
+        "trend_recovery_h45_open" => 3,
+        "ordinary_idle_eod_open" => 4,
+        _ => 0,
+    }
+}
+
 fn idle_key(candidate: &Candidate) -> String {
     let side = match candidate.side {
         Side::Long => "long",
@@ -1530,14 +1818,10 @@ fn bin(value: f64, low: f64, high: f64, name: &str) -> String {
 }
 
 fn portfolio_weight(candidate: &Candidate) -> f64 {
-    if candidate.policy == "ordinary_idle_eod_open"
-        || candidate.policy == "trend_recovery_h45_open"
-        || candidate.policy == "im_day120_140_h45_open"
-        || candidate.policy == "if_vwap_confirm_eod_open"
-    {
+    if candidate.family == "idle_overlay" {
         candidate.weight
     } else {
-        candidate.weight / 4.0
+        candidate.weight / SOTA_SYMBOLS.len() as f64
     }
 }
 
@@ -1614,8 +1898,10 @@ fn z_score_from_moments(
 fn quantile(values: &[f64], quantile: f64) -> f64 {
     let mut sorted = values.to_vec();
     sorted.sort_by(f64::total_cmp);
-    let index = ((sorted.len() - 1) as f64 * quantile).round() as usize;
-    sorted[index]
+    let position = (sorted.len() - 1) as f64 * quantile;
+    let lower = position.floor() as usize;
+    let upper = position.ceil() as usize;
+    sorted[lower] + (sorted[upper] - sorted[lower]) * (position - lower as f64)
 }
 
 fn label_event(candidate: Candidate, exit_price: f64, at_ns: u64, events: &mut Vec<ModelEvent>) {
@@ -1678,7 +1964,10 @@ fn bar_endpoint_ns(tick_ns: u64) -> Result<u64, String> {
 mod tests {
     use chrono::{Duration, NaiveDateTime};
 
-    use super::{CtpdTick, InstrumentConfig, Portfolio};
+    use super::{
+        Candidate, CtpdTick, ExitPlan, InstrumentConfig, InstrumentModel, ModelEvent, Portfolio,
+        Side, VirtualLeg,
+    };
 
     fn config(symbol: &str, market: &str, target: &str) -> InstrumentConfig {
         InstrumentConfig {
@@ -1730,5 +2019,51 @@ mod tests {
     fn target_contract_is_never_the_continuous_market_id() {
         let config = config("IF8888", "IDX-CFFEX-IF", "IF2609");
         assert_ne!(config.market_instrument_id, config.target_instrument_id);
+    }
+
+    #[test]
+    fn fixed_hold_counts_from_entry_across_the_lunch_break() {
+        let config = config("IC8888", "IDX-CFFEX-IC", "IC2609");
+        let mut model = InstrumentModel::new(&config);
+        let timestamp = |time| {
+            NaiveDateTime::parse_from_str(time, "%Y%m%d %H:%M:%S")
+                .unwrap()
+                .and_utc()
+                .timestamp_nanos_opt()
+                .unwrap() as u64
+        };
+        let entry_time_ns = timestamp("20180115 13:01:00");
+        model.overlays.push(VirtualLeg {
+            candidate: Candidate {
+                id: "lunch-break-hold".into(),
+                symbol: "IC8888".into(),
+                side: Side::Long,
+                family: "idle_overlay",
+                policy: "trend_recovery_h45_open",
+                weight: 0.25,
+                signal_time_ns: timestamp("20180115 11:30:00"),
+                entry_time_ns,
+                entry_price: 1.0,
+                prediction: 0.0,
+                exit_plan: ExitPlan::FixedHoldMinutes(45),
+                ret30_signed: 0.0,
+                ret60_signed: 0.0,
+                vwap_signed: 0.0,
+                trend_distance_bps: 0.0,
+            },
+            exit_next_open: false,
+            delayed_bad_at_row: None,
+        });
+        let mut events = Vec::new();
+        model
+            .resolve_due_exits(timestamp("20180115 13:45:00"), 1.0, &mut events)
+            .unwrap();
+        assert!(events.is_empty());
+        model
+            .resolve_due_exits(timestamp("20180115 13:46:00"), 1.0, &mut events)
+            .unwrap();
+        assert!(
+            matches!(events.as_slice(), [ModelEvent::Label { at_ns, .. }] if *at_ns == timestamp("20180115 13:46:00"))
+        );
     }
 }

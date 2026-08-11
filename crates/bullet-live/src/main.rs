@@ -1,10 +1,13 @@
 mod config;
 mod ctpd;
 mod model;
+mod parity;
 mod protocol;
 
 use std::{
     error::Error,
+    fs::OpenOptions,
+    io::{BufWriter, Write},
     sync::{Arc, RwLock},
     time::Instant,
 };
@@ -53,8 +56,35 @@ async fn run() -> Result<(), Box<dyn Error>> {
             }
             seed_benchmark(&path)
         }
+        Some("replay") => {
+            let config = arguments
+                .next()
+                .ok_or("usage: bullet-live replay <config.toml> <output.jsonl>")?;
+            let output = arguments
+                .next()
+                .ok_or("usage: bullet-live replay <config.toml> <output.jsonl>")?;
+            if arguments.next().is_some() {
+                return Err("usage: bullet-live replay <config.toml> <output.jsonl>".into());
+            }
+            replay(&config, &output)
+        }
+        Some("verify-parity") => {
+            let config = arguments.next().ok_or(
+                "usage: bullet-live verify-parity <config.toml> <lab_candidate_decisions.csv> <lab_raw_candidate_labels.csv>",
+            )?;
+            let decisions = arguments.next().ok_or(
+                "usage: bullet-live verify-parity <config.toml> <lab_candidate_decisions.csv> <lab_raw_candidate_labels.csv>",
+            )?;
+            let labels = arguments.next().ok_or(
+                "usage: bullet-live verify-parity <config.toml> <lab_candidate_decisions.csv> <lab_raw_candidate_labels.csv>",
+            )?;
+            if arguments.next().is_some() {
+                return Err("usage: bullet-live verify-parity <config.toml> <lab_candidate_decisions.csv> <lab_raw_candidate_labels.csv>".into());
+            }
+            verify_parity(&config, &decisions, &labels)
+        }
         _ => Err(
-            "usage: bullet-live <serve <config.toml>|benchmark [event_count]|seed-benchmark <config.toml>>"
+            "usage: bullet-live <serve <config.toml>|benchmark [event_count]|seed-benchmark <config.toml>|replay <config.toml> <output.jsonl>|verify-parity <config.toml> <lab_candidate_decisions.csv> <lab_raw_candidate_labels.csv>>"
                 .into(),
         ),
     }
@@ -62,7 +92,7 @@ async fn run() -> Result<(), Box<dyn Error>> {
 
 async fn serve(path: &str) -> Result<(), Box<dyn Error>> {
     let (config, secrets) = LiveConfig::load(path)?;
-    let portfolio = Arc::new(RwLock::new(seed_portfolio(&config)?));
+    let portfolio = Arc::new(RwLock::new(seed_portfolio(&config, false)?));
     let client = reqwest::Client::builder().build()?;
     for instrument in config.instruments.clone() {
         tokio::spawn(ctpd::consume_ticks(
@@ -87,8 +117,9 @@ async fn serve(path: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn seed_portfolio(config: &LiveConfig) -> Result<Portfolio, String> {
+fn seed_portfolio(config: &LiveConfig, capture_ledger: bool) -> Result<Portfolio, String> {
     let mut portfolio = Portfolio::default();
+    portfolio.set_capture_ledger(capture_ledger);
     let mut histories = Vec::new();
     for instrument in &config.instruments {
         let history = bullet_data::read_history_tail(&instrument.parquet, config.history_seed_bars)
@@ -103,6 +134,7 @@ fn seed_portfolio(config: &LiveConfig) -> Result<Portfolio, String> {
             instrument.market_instrument_id.clone(),
             Portfolio::new_model(instrument),
         );
+        portfolio.set_history_day_bar_counts(&instrument.market_instrument_id, &history)?;
         histories.push((instrument.market_instrument_id.clone(), history, 0_usize));
     }
     // Four-way merge preserves the lab's `entry_time, trade_type, symbol`
@@ -125,6 +157,13 @@ fn seed_portfolio(config: &LiveConfig) -> Result<Portfolio, String> {
             (market.clone(), bar)
         };
         portfolio.ingest_history(&market, &bar)?;
+        let next_timestamp = histories
+            .iter()
+            .filter_map(|(_, bars, cursor)| bars.get(*cursor).map(|next| next.timestamp_ns))
+            .min();
+        if next_timestamp != Some(bar.timestamp_ns) {
+            portfolio.flush_history_candidates();
+        }
     }
     Ok(portfolio)
 }
@@ -172,13 +211,64 @@ fn benchmark(events: usize) -> Result<(), Box<dyn Error>> {
 fn seed_benchmark(path: &str) -> Result<(), Box<dyn Error>> {
     let config = LiveConfig::load_without_secrets(path)?;
     let started = Instant::now();
-    let portfolio = seed_portfolio(&config)?;
+    let portfolio = seed_portfolio(&config, false)?;
     let elapsed = started.elapsed();
     println!(
         "history_seed_bars={} seeded_models={} elapsed_ms={}",
         config.history_seed_bars,
         portfolio.model_count(),
         elapsed.as_millis(),
+    );
+    Ok(())
+}
+
+/// Rebuilds the causal in-memory state from Parquet and writes the live
+/// arbitrator's decision ledger.  This is an offline verification command;
+/// it deliberately shares `seed_portfolio` with production instead of
+/// maintaining a separate replay model.
+fn replay(config_path: &str, output_path: &str) -> Result<(), Box<dyn Error>> {
+    let config = LiveConfig::load_without_secrets(config_path)?;
+    let portfolio = seed_portfolio(&config, true)?;
+    let labels_path = format!("{output_path}.labels.jsonl");
+    let file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(output_path)?;
+    let labels_file = OpenOptions::new()
+        .write(true)
+        .create_new(true)
+        .open(&labels_path)?;
+    let mut writer = BufWriter::new(file);
+    let mut labels_writer = BufWriter::new(labels_file);
+    for decision in portfolio.candidate_decisions() {
+        serde_json::to_writer(&mut writer, decision)?;
+        writer.write_all(b"\n")?;
+    }
+    for label in portfolio.candidate_labels() {
+        serde_json::to_writer(&mut labels_writer, label)?;
+        labels_writer.write_all(b"\n")?;
+    }
+    writer.flush()?;
+    labels_writer.flush()?;
+    println!(
+        "replay_candidates={} replay_labels={} output={output_path}",
+        portfolio.candidate_decisions().len(),
+        portfolio.candidate_labels().len()
+    );
+    Ok(())
+}
+
+fn verify_parity(
+    config_path: &str,
+    reference_decisions_path: &str,
+    reference_labels_path: &str,
+) -> Result<(), Box<dyn Error>> {
+    let config = LiveConfig::load_without_secrets(config_path)?;
+    let portfolio = seed_portfolio(&config, true)?;
+    let summary = parity::verify(&portfolio, reference_decisions_path, reference_labels_path)?;
+    println!(
+        "parity=pass decisions={} labels={} canonical_bytes={}",
+        summary.decisions, summary.labels, summary.canonical_bytes
     );
     Ok(())
 }
