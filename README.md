@@ -5,7 +5,7 @@
 `bullet-live` 是可部署到 Linux x86_64 的单一 Rust 二进制。它把 E-Works
 `lab-0334/run_conceptual.py` 的默认并行候选路径接到 Parquet 与 CTPD：启动时
 完整回放四个连续合约 Parquet，随后以 CTPD `IDX-CFFEX-*` 已完成分钟 K 线和 SSE
-Tick 延续状态，并暴露 1Exchange Remote Account Source 所需的两个端点。
+Tick 延续状态，并暴露 1Exchange Remote Account Source 所需的账户、持仓与成交历史端点。
 
 默认可信语义是：主策略只使用 `IC8888`、`IH8888`；`IF8888`、`IM8888` 参与
 四品种候选池和对应 overlay。候选标签严格在
@@ -111,6 +111,8 @@ curl -fsS -H "Authorization: Bearer $(< /etc/bullet/remote-account.token)" \
   https://<bullet-host>/api/accounts
 curl -fsS -H "Authorization: Bearer $(< /etc/bullet/remote-account.token)" \
   'https://<bullet-host>/api/positions?account_id=BULLET%2Flab0334-sim'
+curl -fsS -H "Authorization: Bearer $(< /etc/bullet/remote-account.token)" \
+  'https://<bullet-host>/api/account-history?account_id=BULLET%2Flab0334-sim&limit=100'
 ```
 
 The endpoint returns finite signed positions. Gross futures exposure is
@@ -130,8 +132,12 @@ curl -fsS -X POST "$ONE_EXCHANGE_URL/api/custom-account-sources" \
 ```
 
 Then verify the discovered `BULLET/lab0334-sim` account through the local 1Exchange
-`/api/accounts` and `/api/positions` endpoints. This source intentionally does not provide
-`/api/account-history`, so it is for current target monitoring rather than fill replay.
+`/api/accounts`, `/api/positions`, and `/api/account-history` endpoints. History uses
+`TRADE_FILL_V1`, stable `<candidate-id>/open` and `<candidate-id>/close` IDs, and opaque
+pagination cursors. It records only candidates actually accepted into the live active book:
+rejected candidates and training labels never become fills. `coverage` is an explicit,
+incomplete Parquet-plus-CTPD reconstruction window and is fixed for every page of one cursor
+walk; it is not a claim of broker execution or a permanently archived account ledger.
 
 ## Backtest CLI
 

@@ -399,6 +399,55 @@ pub struct CandidateLabel {
     pub trade_return: f64,
 }
 
+/// A strategy fill reconstructed from the arbitrator's actual active-book
+/// transitions.  This is deliberately separate from the parity ledger: the
+/// latter includes rejected candidates and their labels, while a remote
+/// account history must only contain positions that the model actually held.
+#[derive(Clone, Debug)]
+struct ExecutedFill {
+    candidate_id: String,
+    symbol: String,
+    side: Side,
+    opening: bool,
+    weight: f64,
+    price: f64,
+    at_ns: u64,
+}
+
+#[derive(Clone, Debug, Eq, PartialEq)]
+pub enum FillDirection {
+    Long,
+    Short,
+}
+
+impl FillDirection {
+    pub fn as_protocol_value(&self) -> &'static str {
+        match self {
+            Self::Long => "LONG",
+            Self::Short => "SHORT",
+        }
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub struct HistoricalFill {
+    pub trade_id: String,
+    pub order_id: String,
+    pub product_id: String,
+    pub direction: FillDirection,
+    pub price: f64,
+    pub amount: f64,
+    pub value: f64,
+    pub fee: f64,
+    pub created_at_ns: u64,
+}
+
+#[derive(Clone, Copy, Debug, Default, PartialEq, Eq)]
+pub struct HistoryWindow {
+    pub start_at_ns: Option<u64>,
+    pub end_at_ns: Option<u64>,
+}
+
 #[derive(Clone, Debug)]
 struct Draft {
     side: Side,
@@ -1168,6 +1217,7 @@ struct Arbitrator {
     capture_ledger: bool,
     decisions: Vec<CandidateDecision>,
     labels: Vec<CandidateLabel>,
+    fills: Vec<ExecutedFill>,
 }
 
 impl Arbitrator {
@@ -1183,8 +1233,22 @@ impl Arbitrator {
         }
     }
 
+    fn record_fill(&mut self, candidate: &Candidate, opening: bool, price: f64, at_ns: u64) {
+        self.fills.push(ExecutedFill {
+            candidate_id: candidate.id.clone(),
+            symbol: candidate.symbol.clone(),
+            side: candidate.side,
+            opening,
+            weight: candidate.weight,
+            price,
+            at_ns,
+        });
+    }
+
     fn resolve_label(&mut self, candidate: Candidate, exit_price: f64, at_ns: u64) {
-        self.active.remove(&candidate.id);
+        if let Some(active) = self.active.remove(&candidate.id) {
+            self.record_fill(&active, false, exit_price, at_ns);
+        }
         let trade_return =
             candidate.side.raw_return(candidate.entry_price, exit_price) - ROUND_TRIP_COST;
         if self.capture_ledger {
@@ -1272,6 +1336,12 @@ impl Arbitrator {
         decision.candidate_weight = candidate_weight;
         decision.same_symbol_count = same_symbol.len();
         if same_symbol_is_empty && used + candidate_weight <= 1.0 + 1e-12 {
+            self.record_fill(
+                &candidate,
+                true,
+                candidate.entry_price,
+                candidate.entry_time_ns,
+            );
             self.active.insert(candidate.id.clone(), candidate);
             decision.decision = "accepted".into();
             decision.capital_ok = Some(true);
@@ -1340,6 +1410,13 @@ impl Arbitrator {
         if let Some(price) = replacement_prices.get(&incumbent.symbol).copied() {
             let incumbent = incumbent.clone();
             self.active.remove(&incumbent_id);
+            self.record_fill(&incumbent, false, price, candidate.entry_time_ns);
+            self.record_fill(
+                &candidate,
+                true,
+                candidate.entry_price,
+                candidate.entry_time_ns,
+            );
             self.active.insert(candidate.id.clone(), candidate);
             decision.decision = "accepted".into();
             self.record_decision(decision);
@@ -1449,6 +1526,7 @@ pub struct Portfolio {
     base_reserve_history: Vec<f64>,
     synchronized_markets: BTreeSet<String>,
     targets: BTreeMap<String, TargetPosition>,
+    history_window: HistoryWindow,
 }
 
 impl Portfolio {
@@ -1478,12 +1556,16 @@ impl Portfolio {
     }
 
     pub fn ingest(&mut self, tick: CtpdTick) -> Result<(), String> {
+        let timestamp_ns = tick_timestamp_ns(&tick)?;
         let id = tick.instrument_id.clone();
         let events = self
             .models
             .get_mut(&id)
             .ok_or_else(|| format!("no configured model for CTPD instrument {id}"))?
             .ingest_tick(tick)?;
+        if !events.is_empty() {
+            self.observe_history(timestamp_ns);
+        }
         self.apply(events, true);
         Ok(())
     }
@@ -1498,6 +1580,7 @@ impl Portfolio {
             .get_mut(market_instrument_id)
             .ok_or_else(|| format!("no configured model for history {market_instrument_id}"))?
             .ingest_history(bar)?;
+        self.observe_history(bar.timestamp_ns);
         // The Parquet seed is merged externally by timestamp.  Deferring
         // arbitration until that group is complete preserves Python's
         // same-entry-time reserve batch and `trade_type, symbol, trade_id`
@@ -1707,6 +1790,50 @@ impl Portfolio {
         self.targets.values().cloned().collect()
     }
 
+    pub fn history_fills(&self) -> Vec<HistoricalFill> {
+        self.arbitrator
+            .fills
+            .iter()
+            .filter_map(|fill| {
+                let market_id = self.symbols.get(&fill.symbol)?;
+                let model = self.models.get(market_id)?;
+                let amount = model.config.full_weight_contracts * fill.weight;
+                let value = amount * fill.price * model.config.contract_multiplier;
+                if !amount.is_finite()
+                    || amount <= 0.0
+                    || !fill.price.is_finite()
+                    || fill.price <= 0.0
+                    || !value.is_finite()
+                {
+                    return None;
+                }
+                let direction = match (fill.side, fill.opening) {
+                    (Side::Long, true) | (Side::Short, false) => FillDirection::Long,
+                    (Side::Short, true) | (Side::Long, false) => FillDirection::Short,
+                };
+                let leg = if fill.opening { "open" } else { "close" };
+                Some(HistoricalFill {
+                    trade_id: format!("{}/{}", fill.candidate_id, leg),
+                    order_id: fill.candidate_id.clone(),
+                    product_id: format!("BULLET/FUTURES/{}", model.config.target_instrument_id),
+                    direction,
+                    price: fill.price,
+                    amount,
+                    value,
+                    // lab0334's return ledger has a round-trip cost, but it is
+                    // not a broker commission schedule.  Reporting a made-up
+                    // cash fee would make the remote account less truthful.
+                    fee: 0.0,
+                    created_at_ns: fill.at_ns,
+                })
+            })
+            .collect()
+    }
+
+    pub fn history_window(&self) -> HistoryWindow {
+        self.history_window
+    }
+
     pub fn candidate_decisions(&self) -> &[CandidateDecision] {
         &self.arbitrator.decisions
     }
@@ -1764,6 +1891,19 @@ impl Portfolio {
         }
         self.synchronized_markets.clear();
         self.targets.clear();
+    }
+
+    fn observe_history(&mut self, timestamp_ns: u64) {
+        self.history_window.start_at_ns = Some(
+            self.history_window
+                .start_at_ns
+                .map_or(timestamp_ns, |start| start.min(timestamp_ns)),
+        );
+        self.history_window.end_at_ns = Some(
+            self.history_window
+                .end_at_ns
+                .map_or(timestamp_ns, |end| end.max(timestamp_ns)),
+        );
     }
 }
 
@@ -1970,11 +2110,13 @@ fn bar_endpoint_ns(tick_ns: u64) -> Result<u64, String> {
 
 #[cfg(test)]
 mod tests {
+    use std::collections::BTreeMap;
+
     use chrono::{Duration, NaiveDateTime};
 
     use super::{
-        Candidate, CtpdTick, ExitPlan, InstrumentConfig, InstrumentModel, ModelEvent, Portfolio,
-        Side, VirtualLeg,
+        Arbitrator, Candidate, CtpdTick, ExitPlan, InstrumentConfig, InstrumentModel, ModelEvent,
+        Portfolio, Side, VirtualLeg,
     };
 
     fn config(symbol: &str, market: &str, target: &str) -> InstrumentConfig {
@@ -2119,5 +2261,151 @@ mod tests {
             portfolio.candidate_decisions(),
             [decision] if decision.candidate_id == "recovered-candidate" && decision.decision == "accepted"
         ));
+    }
+
+    #[test]
+    fn records_only_accepted_active_candidates_as_open_and_close_fills() {
+        let config = config("IM8888", "IDX-CFFEX-IM", "IM2609");
+        let mut portfolio = Portfolio::default();
+        portfolio.set_capture_ledger(true);
+        portfolio.insert(
+            config.market_instrument_id.clone(),
+            Portfolio::new_model(&config),
+        );
+        portfolio
+            .arbitrator
+            .histories
+            .insert("global".into(), vec![(0, 0.01)]);
+        let accepted = Candidate {
+            id: "accepted-candidate".into(),
+            symbol: "IM8888".into(),
+            side: Side::Long,
+            family: "base",
+            policy: "fixed_hold",
+            weight: 1.0,
+            signal_time_ns: 1,
+            entry_time_ns: 1,
+            entry_price: 4_000.0,
+            prediction: 0.0,
+            exit_plan: ExitPlan::FixedHoldMinutes(1),
+            ret30_signed: 0.0,
+            ret60_signed: 0.0,
+            vwap_signed: 0.0,
+            trend_distance_bps: 0.0,
+        };
+        portfolio
+            .pending_candidates
+            .insert(accepted.entry_time_ns, vec![accepted.clone()]);
+        portfolio.flush_history_candidates();
+        portfolio.arbitrator.resolve_label(accepted, 4_010.0, 2);
+
+        portfolio.arbitrator.histories.clear();
+        portfolio
+            .arbitrator
+            .histories
+            .insert("global".into(), vec![(0, -0.01)]);
+        portfolio.pending_candidates.insert(
+            3,
+            vec![Candidate {
+                id: "rejected-candidate".into(),
+                symbol: "IM8888".into(),
+                side: Side::Short,
+                family: "base",
+                policy: "fixed_hold",
+                weight: 1.0,
+                signal_time_ns: 3,
+                entry_time_ns: 3,
+                entry_price: 4_020.0,
+                prediction: 0.0,
+                exit_plan: ExitPlan::FixedHoldMinutes(1),
+                ret30_signed: 0.0,
+                ret60_signed: 0.0,
+                vwap_signed: 0.0,
+                trend_distance_bps: 0.0,
+            }],
+        );
+        portfolio.flush_history_candidates();
+
+        let fills = portfolio.history_fills();
+        assert_eq!(fills.len(), 2);
+        assert_eq!(fills[0].trade_id, "accepted-candidate/open");
+        assert_eq!(fills[0].product_id, "BULLET/FUTURES/IM2609");
+        assert_eq!(fills[0].amount, 10.0);
+        assert_eq!(fills[0].direction, super::FillDirection::Long);
+        assert_eq!(fills[1].trade_id, "accepted-candidate/close");
+        assert_eq!(fills[1].direction, super::FillDirection::Short);
+        assert!(
+            portfolio
+                .candidate_decisions()
+                .iter()
+                .any(|decision| decision.candidate_id == "rejected-candidate"
+                    && decision.decision == "rejected")
+        );
+    }
+
+    #[test]
+    fn replacement_closes_the_incumbent_before_opening_the_successor() {
+        let mut arbitrator = Arbitrator::default();
+        arbitrator
+            .histories
+            .insert("global".into(), vec![(0, 0.01)]);
+        let incumbent = Candidate {
+            id: "incumbent".into(),
+            symbol: "IM8888".into(),
+            side: Side::Long,
+            family: "base",
+            policy: "fixed_hold",
+            weight: 1.0,
+            signal_time_ns: 1,
+            entry_time_ns: 1,
+            entry_price: 4_000.0,
+            prediction: 0.0,
+            exit_plan: ExitPlan::FixedHoldMinutes(1),
+            ret30_signed: 0.0,
+            ret60_signed: 0.0,
+            vwap_signed: 0.0,
+            trend_distance_bps: 0.0,
+        };
+        arbitrator.record_fill(
+            &incumbent,
+            true,
+            incumbent.entry_price,
+            incumbent.entry_time_ns,
+        );
+        arbitrator.active.insert(incumbent.id.clone(), incumbent);
+        let successor = Candidate {
+            id: "successor".into(),
+            symbol: "IM8888".into(),
+            side: Side::Short,
+            family: "base",
+            policy: "fixed_hold",
+            weight: 1.0,
+            signal_time_ns: 2,
+            entry_time_ns: 2,
+            entry_price: 4_020.0,
+            prediction: 0.0,
+            exit_plan: ExitPlan::FixedHoldMinutes(1),
+            ret30_signed: 0.0,
+            ret60_signed: 0.0,
+            vwap_signed: 0.0,
+            trend_distance_bps: 0.0,
+        };
+        let mut prices = BTreeMap::new();
+        prices.insert("IM8888".into(), 4_010.0);
+        let replacement = arbitrator.decide(successor, &prices);
+
+        assert!(matches!(replacement, Some((candidate, 4_010.0)) if candidate.id == "incumbent"));
+        assert_eq!(
+            arbitrator
+                .fills
+                .iter()
+                .map(|fill| (fill.candidate_id.as_str(), fill.opening, fill.at_ns))
+                .collect::<Vec<_>>(),
+            vec![
+                ("incumbent", true, 1),
+                ("incumbent", false, 2),
+                ("successor", true, 2),
+            ]
+        );
     }
 }
