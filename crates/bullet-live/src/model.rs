@@ -530,7 +530,10 @@ impl InstrumentModel {
             return Ok(Vec::new());
         }
         if self.last_tick_ns.is_some_and(|prior| tick_ns < prior) {
-            return Err("CTPD tick is out of order".into());
+            // CTPD reconnects can replay a tick older than the accepted
+            // stream. It must not overwrite cumulative deltas, the current
+            // bar, or the published target state.
+            return Ok(Vec::new());
         }
         let volume_delta = cumulative_delta(tick.volume, self.last_cumulative_volume);
         let money_delta = cumulative_delta(tick.turnover, self.last_cumulative_turnover);
@@ -1983,8 +1986,15 @@ mod tests {
     }
 
     #[test]
-    fn rejects_out_of_order_ticks() {
+    fn ignores_stale_ticks_without_poisoning_later_ticks() {
         let config = config("IF8888", "IDX-CFFEX-IF", "IF2609");
+        let timestamp = |time| {
+            NaiveDateTime::parse_from_str(time, "%Y%m%d %H:%M:%S")
+                .unwrap()
+                .and_utc()
+                .timestamp_nanos_opt()
+                .unwrap() as u64
+        };
         let mut portfolio = Portfolio::default();
         portfolio.insert(
             config.market_instrument_id.clone(),
@@ -2000,19 +2010,20 @@ mod tests {
                 action_day: at.format("%Y%m%d").to_string(),
                 update_time: at.format("%H:%M:%S").to_string(),
                 update_millisec: 0,
-                last_price: 4_000.0,
+                last_price: 4_000.0 + minute as f64,
                 volume: minute as f64 + 1.0,
                 turnover: 4_000.0 * (minute + 1) as f64,
                 open_interest: 100.0,
             }
         };
         portfolio.ingest(tick(1)).unwrap();
-        assert!(
-            portfolio
-                .ingest(tick(0))
-                .unwrap_err()
-                .contains("out of order")
-        );
+        portfolio.ingest(tick(0)).unwrap();
+        portfolio.ingest(tick(2)).unwrap();
+
+        let model = portfolio.models.get("IDX-CFFEX-IF").unwrap();
+        assert_eq!(model.last_tick_ns, Some(timestamp("20260810 09:32:00")));
+        assert_eq!(model.current.as_ref().unwrap().open, 4_002.0);
+        assert_eq!(model.current.as_ref().unwrap().volume, 1.0);
     }
 
     #[test]
