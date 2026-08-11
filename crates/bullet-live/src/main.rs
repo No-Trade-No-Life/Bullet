@@ -15,6 +15,7 @@ use std::{
 use config::{InstrumentConfig, LiveConfig};
 use model::{CtpdTick, Portfolio};
 use protocol::RemoteAccountState;
+use tokio::sync::Mutex;
 
 #[tokio::main]
 async fn main() {
@@ -94,13 +95,25 @@ async fn serve(path: &str) -> Result<(), Box<dyn Error>> {
     let (config, secrets) = LiveConfig::load(path)?;
     let portfolio = Arc::new(RwLock::new(seed_portfolio(&config, false)?));
     let client = reqwest::Client::builder().build()?;
-    for instrument in config.instruments.clone() {
+    let instruments = Arc::new(config.instruments.clone());
+    ctpd::recover_and_synchronize(
+        &client,
+        &config.ctpd,
+        &secrets.ctpd_bearer_token,
+        &instruments,
+        &portfolio,
+    )
+    .await?;
+    let recovery_gate = Arc::new(Mutex::new(()));
+    for instrument in instruments.iter().cloned() {
         tokio::spawn(ctpd::consume_ticks(
             client.clone(),
             config.ctpd.clone(),
             secrets.ctpd_bearer_token.clone(),
             instrument,
+            instruments.clone(),
             portfolio.clone(),
+            recovery_gate.clone(),
         ));
     }
     let app = protocol::app(RemoteAccountState {

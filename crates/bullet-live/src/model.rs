@@ -1753,6 +1753,11 @@ impl Portfolio {
             .map(|indicator| indicator.bar.timestamp_ns)
     }
 
+    #[cfg(test)]
+    pub fn is_fully_synchronized(&self) -> bool {
+        self.synchronized_markets.len() == self.models.len()
+    }
+
     pub fn clear_all(&mut self) {
         for model in self.models.values_mut() {
             model.clear_live_state();
@@ -2076,5 +2081,43 @@ mod tests {
         assert!(
             matches!(events.as_slice(), [ModelEvent::Label { at_ns, .. }] if *at_ns == timestamp("20180115 13:46:00"))
         );
+    }
+
+    #[test]
+    fn flush_history_candidates_immediately_arbitrates_the_recovered_batch() {
+        let mut portfolio = Portfolio::default();
+        portfolio.set_capture_ledger(true);
+        portfolio
+            .arbitrator
+            .histories
+            .insert("global".into(), vec![(0, 0.01)]);
+        portfolio.pending_candidates.insert(
+            1,
+            vec![Candidate {
+                id: "recovered-candidate".into(),
+                symbol: "IM8888".into(),
+                side: Side::Long,
+                family: "base",
+                policy: "fixed_hold",
+                weight: 1.0,
+                signal_time_ns: 1,
+                entry_time_ns: 1,
+                entry_price: 4_000.0,
+                prediction: 0.0,
+                exit_plan: ExitPlan::FixedHoldMinutes(1),
+                ret30_signed: 0.0,
+                ret60_signed: 0.0,
+                vwap_signed: 0.0,
+                trend_distance_bps: 0.0,
+            }],
+        );
+
+        portfolio.flush_history_candidates();
+
+        assert!(portfolio.pending_candidates.is_empty());
+        assert!(matches!(
+            portfolio.candidate_decisions(),
+            [decision] if decision.candidate_id == "recovered-candidate" && decision.decision == "accepted"
+        ));
     }
 }
