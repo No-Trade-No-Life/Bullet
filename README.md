@@ -51,6 +51,29 @@ cargo build --release -p bullet-live
 每次合并到 `main` 的 release workflow 还构建完全静态的
 `bullet-live-x86_64-unknown-linux-musl` 与 SHA-256 文件，适合 Amazon Linux 2023。
 
+### lab0334 一致性门禁
+
+发布任何推理改动前，必须以同一份 Parquet、同一提交的 E-Works lab0334 生成参考账本，
+并运行下列门禁。`candidate_decisions.csv` 是 lab 正常运行输出；第二个 CSV 必须由仓库
+附带的导出工具生成，包含仲裁前的全部候选标签，不能以最终成交表替代。
+
+```bash
+python3 scripts/export-lab0334-parity-reference.py \
+  --lab /path/to/E-Works/labs/lab-0334/run_optimized.py \
+  --data /path/to/parquet \
+  --output /tmp/lab0334-raw-candidate-labels.csv
+cargo run --release -p bullet-live -- verify-parity \
+  /etc/bullet/lab0334.toml \
+  /path/to/lab-output/candidate_decisions.csv \
+  /tmp/lab0334-raw-candidate-labels.csv
+```
+
+成功时输出 `parity=pass`。它将 Python 与 Bullet 的候选身份、预测键、成熟标签、所有
+仲裁字段、平仓时刻和价格规范化为按候选排序的 JSONL，并逐字节比较。所有有限浮点数在
+写入规范账本前固定为 14 位小数（负零归零）；该格式规则在比较前固定，不能在出现差异后
+调整。原始决策分支在格式化前已逐字段进入规范账本，因此任何接受/拒绝、仓位、替换或标签
+时序差异都会使命令失败。
+
 ### Singapore EC2 部署
 
 目标实例仅允许 loopback listener；以 Caddy 或 Nginx 在公开 HTTPS hostname 上反代到
