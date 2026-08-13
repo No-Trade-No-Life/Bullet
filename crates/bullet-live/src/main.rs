@@ -1,5 +1,6 @@
 mod config;
 mod ctpd;
+mod linkit;
 mod market_time;
 mod model;
 mod parity;
@@ -14,9 +15,11 @@ use std::{
 };
 
 use config::{InstrumentConfig, LiveConfig};
-use model::{CtpdTick, Portfolio};
+use model::{CtpdTick, LiveTradeSignal, Portfolio};
 use protocol::RemoteAccountState;
-use tokio::sync::Mutex;
+use tokio::sync::{Mutex, mpsc};
+
+const LINKIT_SIGNAL_QUEUE_CAPACITY: usize = 64;
 
 #[tokio::main]
 async fn main() {
@@ -105,6 +108,7 @@ async fn serve(path: &str) -> Result<(), Box<dyn Error>> {
         &portfolio,
     )
     .await?;
+    let signal_tx = start_linkit_sender(&client, &config, secrets.linkit_bearer_token);
     let recovery_gate = Arc::new(Mutex::new(()));
     for instrument in instruments.iter().cloned() {
         tokio::spawn(ctpd::consume_ticks(
@@ -112,9 +116,12 @@ async fn serve(path: &str) -> Result<(), Box<dyn Error>> {
             config.ctpd.clone(),
             secrets.ctpd_bearer_token.clone(),
             instrument,
-            instruments.clone(),
-            portfolio.clone(),
-            recovery_gate.clone(),
+            ctpd::LiveState {
+                instruments: instruments.clone(),
+                portfolio: portfolio.clone(),
+                recovery_gate: recovery_gate.clone(),
+            },
+            signal_tx.clone(),
         ));
     }
     let app = protocol::app(RemoteAccountState {
@@ -129,6 +136,23 @@ async fn serve(path: &str) -> Result<(), Box<dyn Error>> {
     );
     axum::serve(listener, app).await?;
     Ok(())
+}
+
+fn start_linkit_sender(
+    client: &reqwest::Client,
+    config: &LiveConfig,
+    bearer_token: Option<String>,
+) -> Option<mpsc::Sender<LiveTradeSignal>> {
+    let linkit = config.linkit.clone()?;
+    let bearer_token = bearer_token.expect("Linkit config loads its token file");
+    let (sender, receiver) = mpsc::channel(LINKIT_SIGNAL_QUEUE_CAPACITY);
+    tokio::spawn(linkit::send_loop(
+        client.clone(),
+        linkit,
+        bearer_token,
+        receiver,
+    ));
+    Some(sender)
 }
 
 fn seed_portfolio(config: &LiveConfig, capture_ledger: bool) -> Result<Portfolio, String> {

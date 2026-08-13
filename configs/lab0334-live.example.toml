@@ -19,6 +19,13 @@ stale_after_ms = 10000
 allow_unauthenticated = false
 bearer_token_file = "/etc/bullet/remote-account.token"
 
+# Optional real-time trading notifications. The Bot token file belongs to the
+# `bullet` service account, mode 0600, and never belongs in this repository.
+[linkit]
+base_url = "https://linkit.ntnl.io"
+bearer_token_file = "/etc/bullet/linkit.token"
+recipient_username = "0xCZ"
+
 # market_instrument_id is the CTPD continuous synthetic index used for the
 # Parquet splice, SSE and Kline recovery. target_instrument_id is the current
 # front contract shown in the simulated account and must be rolled explicitly.
