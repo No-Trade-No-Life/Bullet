@@ -4,7 +4,7 @@ use std::{
 };
 
 use bullet_data::HistoryBar;
-use chrono::{DateTime, FixedOffset, TimeZone, Timelike, Utc};
+use chrono::{DateTime, Timelike, Utc};
 use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
@@ -15,6 +15,7 @@ use tokio::{
 
 use crate::{
     config::{CtpdConfig, InstrumentConfig},
+    market_time::{ctpd_ms_from_timestamp_ns, shanghai, timestamp_ns_from_ctpd_ms},
     model::{CtpdTick, Portfolio},
 };
 
@@ -69,7 +70,7 @@ pub async fn consume_ticks(
 /// CFFEX has no ticks from 11:30 through 12:59 China Standard Time, so that
 /// expected silence cannot invalidate an already synchronized target.
 fn is_cffex_lunch_break(now: DateTime<Utc>) -> bool {
-    let local = now.with_timezone(&FixedOffset::east_opt(8 * 60 * 60).expect("CST offset exists"));
+    let local = now.with_timezone(&shanghai());
     (local.hour() == 11 && local.minute() >= 30) || local.hour() == 12
 }
 
@@ -197,7 +198,7 @@ async fn recover_completed_klines(
         .expect("portfolio lock poisoned")
         .last_bar_timestamp_ns(&instrument.market_instrument_id)
         .ok_or("cannot recover CTPD Klines before Parquet history is seeded")?;
-    let last_ms = ctpd_ms_from_market_ns(last_market_ns)?;
+    let last_ms = ctpd_ms_from_timestamp_ns(last_market_ns)?;
     if now_ms < last_ms {
         return Err("CTPD clock precedes the seeded Parquet history".into());
     }
@@ -306,7 +307,7 @@ fn history_bar_from_kline(kline: CtpdKline) -> Result<HistoryBar, String> {
     {
         return Err("CTPD Kline has invalid market values".into());
     }
-    let timestamp_ns = market_ns_from_ctpd_ms(
+    let timestamp_ns = timestamp_ns_from_ctpd_ms(
         kline
             .start_ms
             .checked_add(60_000)
@@ -322,40 +323,6 @@ fn history_bar_from_kline(kline: CtpdKline) -> Result<HistoryBar, String> {
         money: kline.money,
         open_interest: kline.open_interest,
     })
-}
-
-/// Parquet timestamps encode CFFEX's Shanghai wall-clock labels without a
-/// timezone. CTPD's Kline query uses true Unix milliseconds. Keep the model
-/// in the Parquet coordinate and perform this conversion only at the HTTP
-/// boundary; treating one representation as the other shifts the strategy by
-/// eight hours.
-fn ctpd_ms_from_market_ns(timestamp_ns: u64) -> Result<i64, String> {
-    let pseudo_utc = DateTime::<Utc>::from_timestamp_nanos(
-        i64::try_from(timestamp_ns).map_err(|_| "market timestamp outside chrono range")?,
-    );
-    beijing()
-        .from_local_datetime(&pseudo_utc.naive_utc())
-        .single()
-        .map(|datetime| datetime.with_timezone(&Utc).timestamp_millis())
-        .ok_or("market timestamp is not an unambiguous Shanghai time".into())
-}
-
-fn market_ns_from_ctpd_ms(timestamp_ms: i64) -> Result<u64, String> {
-    let market = DateTime::<Utc>::from_timestamp_millis(timestamp_ms)
-        .ok_or("CTPD Kline timestamp outside chrono range")?
-        .with_timezone(&beijing())
-        .naive_local();
-    u64::try_from(
-        market
-            .and_utc()
-            .timestamp_nanos_opt()
-            .ok_or("CTPD Kline timestamp outside chrono range")?,
-    )
-    .map_err(|_| "CTPD Kline timestamp before epoch".into())
-}
-
-fn beijing() -> FixedOffset {
-    FixedOffset::east_opt(8 * 3_600).expect("China Standard Time offset is valid")
 }
 
 #[derive(Default)]
@@ -416,11 +383,12 @@ mod tests {
 
     use super::{
         CtpdConnection, CtpdKline, RecoveredKline, SseDecoder, consume_connection,
-        ctpd_ms_from_market_ns, history_bar_from_kline, kline_recovery_windows,
-        recover_and_synchronize, sort_recovered_klines,
+        history_bar_from_kline, kline_recovery_windows, recover_and_synchronize,
+        sort_recovered_klines,
     };
     use crate::{
         config::{CtpdConfig, InstrumentConfig},
+        market_time::{ctpd_ms_from_timestamp_ns, timestamp_ns_from_shanghai_wall_clock},
         model::Portfolio,
     };
     use bullet_data::HistoryBar;
@@ -441,7 +409,7 @@ mod tests {
     }
 
     #[test]
-    fn converts_ctpd_utc_klines_to_parquet_market_labels() {
+    fn keeps_ctpd_utc_klines_as_real_instants() {
         let start_ms = NaiveDateTime::parse_from_str("20260810 01:30:00", "%Y%m%d %H:%M:%S")
             .unwrap()
             .and_utc()
@@ -458,13 +426,15 @@ mod tests {
             closed: true,
         })
         .unwrap();
-        let expected = NaiveDateTime::parse_from_str("20260810 09:31:00", "%Y%m%d %H:%M:%S")
-            .unwrap()
-            .and_utc()
-            .timestamp_nanos_opt()
-            .unwrap() as u64;
+        let expected = timestamp_ns_from_shanghai_wall_clock(
+            NaiveDateTime::parse_from_str("20260810 09:31:00", "%Y%m%d %H:%M:%S").unwrap(),
+        )
+        .unwrap();
         assert_eq!(bar.timestamp_ns, expected);
-        assert_eq!(ctpd_ms_from_market_ns(expected).unwrap(), start_ms + 60_000);
+        assert_eq!(
+            ctpd_ms_from_timestamp_ns(expected).unwrap(),
+            start_ms + 60_000
+        );
     }
 
     #[test]
@@ -551,11 +521,10 @@ mod tests {
             instrument("IM8888", "IDX-CFFEX-IM", "IM2609"),
         ];
         let timestamp = |time| {
-            NaiveDateTime::parse_from_str(time, "%Y%m%d %H:%M:%S")
-                .unwrap()
-                .and_utc()
-                .timestamp_nanos_opt()
-                .unwrap() as u64
+            timestamp_ns_from_shanghai_wall_clock(
+                NaiveDateTime::parse_from_str(time, "%Y%m%d %H:%M:%S").unwrap(),
+            )
+            .unwrap()
         };
         let mut initial = Portfolio::default();
         for instrument in &instruments {
@@ -651,14 +620,11 @@ mod tests {
             .ingest_history(
                 &instrument.market_instrument_id,
                 &HistoryBar {
-                    timestamp_ns: NaiveDateTime::parse_from_str(
-                        "20260810 09:30:00",
-                        "%Y%m%d %H:%M:%S",
+                    timestamp_ns: timestamp_ns_from_shanghai_wall_clock(
+                        NaiveDateTime::parse_from_str("20260810 09:30:00", "%Y%m%d %H:%M:%S")
+                            .unwrap(),
                     )
-                    .unwrap()
-                    .and_utc()
-                    .timestamp_nanos_opt()
-                    .unwrap() as u64,
+                    .unwrap(),
                     open: 4_000.0,
                     high: 4_000.0,
                     low: 4_000.0,

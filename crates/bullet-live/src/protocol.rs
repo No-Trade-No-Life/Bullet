@@ -369,7 +369,9 @@ mod tests {
     use axum::{body::Body, http::Request};
     use tower::ServiceExt;
 
-    use super::{AccountHistoryQuery, Position, RemoteAccountState, app, page_history};
+    use super::{
+        AccountHistoryQuery, Position, RemoteAccountState, app, format_timestamp, page_history,
+    };
     use crate::model::{FillDirection, HistoricalFill, HistoryWindow, Portfolio, TargetPosition};
 
     fn seeded_portfolio() -> Arc<RwLock<Portfolio>> {
@@ -568,5 +570,15 @@ mod tests {
         assert!(position.notional_value.is_sign_negative());
         assert!(position.valuation.is_sign_positive());
         assert!(position.floating_profit.is_sign_positive());
+    }
+
+    #[test]
+    fn serializes_real_utc_history_timestamps_for_shanghai_market_time() {
+        let timestamp_ns = 1_786_504_200_000_000_000_u64;
+
+        assert_eq!(
+            format_timestamp(timestamp_ns).unwrap(),
+            "2026-08-12T03:10:00.000000000Z"
+        );
     }
 }

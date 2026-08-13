@@ -1,10 +1,11 @@
 use std::collections::{BTreeMap, BTreeSet, VecDeque};
 
 use bullet_data::HistoryBar;
-use chrono::{DateTime, NaiveDate, NaiveDateTime, NaiveTime, Timelike, Utc};
+use chrono::{NaiveDate, NaiveDateTime, NaiveTime, Timelike};
 use serde::{Deserialize, Serialize};
 
 use crate::config::InstrumentConfig;
+use crate::market_time::{market_datetime, timestamp_ns_from_shanghai_wall_clock};
 
 const NS_PER_MINUTE: u64 = 60_000_000_000;
 const ROUND_TRIP_COST: f64 = 0.000_246;
@@ -2060,13 +2061,6 @@ fn label_event(candidate: Candidate, exit_price: f64, at_ns: u64, events: &mut V
     });
 }
 
-fn market_datetime(timestamp_ns: u64) -> Result<NaiveDateTime, String> {
-    Ok(DateTime::<Utc>::from_timestamp_nanos(
-        i64::try_from(timestamp_ns).map_err(|_| "timestamp outside chrono range")?,
-    )
-    .naive_utc())
-}
-
 fn market_day(timestamp_ns: u64) -> Result<NaiveDate, String> {
     Ok(market_datetime(timestamp_ns)?.date())
 }
@@ -2091,13 +2085,7 @@ fn tick_timestamp_ns(tick: &CtpdTick) -> Result<u64, String> {
     }
     let datetime = NaiveDateTime::new(date, time)
         + chrono::Duration::milliseconds(i64::from(tick.update_millisec));
-    u64::try_from(
-        datetime
-            .and_utc()
-            .timestamp_nanos_opt()
-            .ok_or("CTPD timestamp outside range")?,
-    )
-    .map_err(|_| "CTPD timestamp before epoch".into())
+    timestamp_ns_from_shanghai_wall_clock(datetime)
 }
 
 fn bar_endpoint_ns(tick_ns: u64) -> Result<u64, String> {
@@ -2118,6 +2106,7 @@ mod tests {
         Arbitrator, Candidate, CtpdTick, ExitPlan, InstrumentConfig, InstrumentModel, ModelEvent,
         Portfolio, Side, VirtualLeg,
     };
+    use crate::market_time::timestamp_ns_from_shanghai_wall_clock;
 
     fn config(symbol: &str, market: &str, target: &str) -> InstrumentConfig {
         InstrumentConfig {
@@ -2136,11 +2125,10 @@ mod tests {
     fn ignores_stale_ticks_without_poisoning_later_ticks() {
         let config = config("IF8888", "IDX-CFFEX-IF", "IF2609");
         let timestamp = |time| {
-            NaiveDateTime::parse_from_str(time, "%Y%m%d %H:%M:%S")
-                .unwrap()
-                .and_utc()
-                .timestamp_nanos_opt()
-                .unwrap() as u64
+            timestamp_ns_from_shanghai_wall_clock(
+                NaiveDateTime::parse_from_str(time, "%Y%m%d %H:%M:%S").unwrap(),
+            )
+            .unwrap()
         };
         let mut portfolio = Portfolio::default();
         portfolio.insert(
@@ -2184,11 +2172,10 @@ mod tests {
         let config = config("IC8888", "IDX-CFFEX-IC", "IC2609");
         let mut model = InstrumentModel::new(&config);
         let timestamp = |time| {
-            NaiveDateTime::parse_from_str(time, "%Y%m%d %H:%M:%S")
-                .unwrap()
-                .and_utc()
-                .timestamp_nanos_opt()
-                .unwrap() as u64
+            timestamp_ns_from_shanghai_wall_clock(
+                NaiveDateTime::parse_from_str(time, "%Y%m%d %H:%M:%S").unwrap(),
+            )
+            .unwrap()
         };
         let entry_time_ns = timestamp("20180115 13:01:00");
         model.overlays.push(VirtualLeg {
