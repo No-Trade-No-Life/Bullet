@@ -145,7 +145,7 @@ cargo build --release -p bullet-live
 
 ### Live safety and validation
 
-The adapter fails closed: it clears published targets when CTPD is disconnected, stale, or out of order, and only republishes them after all configured instruments are recovered from closed Klines. It refuses a live start with stale Parquet input. Linkit notifications, when configured, are asynchronous and do not alter inference or target state.
+The adapter fails closed: it clears published targets when CTPD is disconnected, stale, or out of order, and only republishes them after all configured instruments are recovered from closed Klines. It refuses a live start with stale Parquet input. Linkit notifications, when configured for a group conversation, are asynchronous and do not alter inference or target state.
 
 Before changing live inference, compare the Rust implementation with an E-Works reference generated from the same Parquet history:
 

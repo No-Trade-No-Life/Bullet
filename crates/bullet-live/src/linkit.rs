@@ -10,8 +10,8 @@ use crate::{config::LinkitConfig, market_time::shanghai, model::LiveTradeSignal}
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
 
 #[derive(Serialize)]
-struct DirectMessage<'a> {
-    recipient_username: &'a str,
+struct GroupMessage<'a> {
+    conversation_id: &'a str,
     body: String,
 }
 
@@ -41,8 +41,8 @@ async fn send_signal(
     client
         .post(url)
         .bearer_auth(bearer_token)
-        .json(&DirectMessage {
-            recipient_username: &config.recipient_username,
+        .json(&GroupMessage {
+            conversation_id: &config.conversation_id,
             body: format_signal(signal)?,
         })
         .timeout(DELIVERY_TIMEOUT)
@@ -109,7 +109,7 @@ mod tests {
     }
 
     #[tokio::test]
-    async fn posts_the_documented_direct_message_payload() {
+    async fn posts_the_documented_group_message_payload() {
         let captured = Arc::new(Mutex::new(None));
         let app = Router::new()
             .route("/bot/v1/messages", post(capture))
@@ -120,7 +120,7 @@ mod tests {
         let config = LinkitConfig {
             base_url: format!("http://{address}"),
             bearer_token_file: "/unused".into(),
-            recipient_username: "0xCZ".into(),
+            conversation_id: "5077b76d-962f-45dd-83dd-05e78b5cabd7".into(),
         };
 
         send_signal(
@@ -135,7 +135,11 @@ mod tests {
 
         let (authorization, payload) = captured.lock().unwrap().clone().unwrap();
         assert_eq!(authorization, "Bearer linkit-test-token");
-        assert_eq!(payload["recipient_username"], "0xCZ");
+        assert_eq!(
+            payload["conversation_id"],
+            "5077b76d-962f-45dd-83dd-05e78b5cabd7"
+        );
+        assert!(payload.get("recipient_username").is_none());
         assert_eq!(
             payload["body"],
             "Bullet lab0334 OPEN: LONG 3 IM2609 @ 7123.50 (IM8888, 2026-08-14T05:00:00+08:00)"
@@ -154,7 +158,7 @@ mod tests {
         let config = LinkitConfig {
             base_url: format!("http://{address}"),
             bearer_token_file: "/unused".into(),
-            recipient_username: "0xCZ".into(),
+            conversation_id: "5077b76d-962f-45dd-83dd-05e78b5cabd7".into(),
         };
         let signal = signal();
 
