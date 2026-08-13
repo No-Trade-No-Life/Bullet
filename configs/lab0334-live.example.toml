@@ -24,7 +24,7 @@ bearer_token_file = "/etc/bullet/remote-account.token"
 [linkit]
 base_url = "https://linkit.ntnl.io"
 bearer_token_file = "/etc/bullet/linkit.token"
-recipient_username = "0xCZ"
+conversation_id = "5077b76d-962f-45dd-83dd-05e78b5cabd7"
 
 # market_instrument_id is the CTPD continuous synthetic index used for the
 # Parquet splice, SSE and Kline recovery. target_instrument_id is the current
