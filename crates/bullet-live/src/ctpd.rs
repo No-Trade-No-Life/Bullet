@@ -9,14 +9,14 @@ use futures_util::StreamExt;
 use reqwest::Client;
 use serde::Deserialize;
 use tokio::{
-    sync::Mutex,
+    sync::{Mutex, mpsc},
     time::{sleep, timeout},
 };
 
 use crate::{
     config::{CtpdConfig, InstrumentConfig},
     market_time::{ctpd_ms_from_timestamp_ns, shanghai, timestamp_ns_from_ctpd_ms},
-    model::{CtpdTick, Portfolio},
+    model::{CtpdTick, LiveTradeSignal, Portfolio},
 };
 
 const KLINE_RECOVERY_CHUNK_MS: i64 = 24 * 60 * 60 * 1_000;
@@ -30,18 +30,18 @@ pub async fn consume_ticks(
     ctpd: CtpdConfig,
     bearer_token: String,
     instrument: InstrumentConfig,
-    instruments: Arc<Vec<InstrumentConfig>>,
-    portfolio: Arc<RwLock<Portfolio>>,
-    recovery_gate: Arc<Mutex<()>>,
+    state: LiveState,
+    signal_tx: Option<mpsc::Sender<LiveTradeSignal>>,
 ) {
     let mut recover_before_connect = false;
     let connection = CtpdConnection {
         client: &client,
         ctpd: &ctpd,
         bearer_token: &bearer_token,
-        instruments: &instruments,
-        portfolio: &portfolio,
-        recovery_gate: &recovery_gate,
+        instruments: &state.instruments,
+        portfolio: &state.portfolio,
+        recovery_gate: &state.recovery_gate,
+        signal_tx: signal_tx.as_ref(),
     };
     loop {
         let result = consume_connection(&connection, &instrument, recover_before_connect).await;
@@ -55,8 +55,9 @@ pub async fn consume_ticks(
             );
         }
         if !expected_lunch_break {
-            let _recovery = recovery_gate.lock().await;
-            portfolio
+            let _recovery = state.recovery_gate.lock().await;
+            state
+                .portfolio
                 .write()
                 .expect("portfolio lock poisoned")
                 .clear_all();
@@ -64,6 +65,13 @@ pub async fn consume_ticks(
         recover_before_connect = true;
         sleep(Duration::from_millis(250)).await;
     }
+}
+
+#[derive(Clone)]
+pub struct LiveState {
+    pub instruments: Arc<Vec<InstrumentConfig>>,
+    pub portfolio: Arc<RwLock<Portfolio>>,
+    pub recovery_gate: Arc<Mutex<()>>,
 }
 
 /// lab0334 can hold a virtual leg from the morning into the afternoon session.
@@ -81,6 +89,7 @@ struct CtpdConnection<'a> {
     instruments: &'a [InstrumentConfig],
     portfolio: &'a Arc<RwLock<Portfolio>>,
     recovery_gate: &'a Arc<Mutex<()>>,
+    signal_tx: Option<&'a mpsc::Sender<LiveTradeSignal>>,
 }
 
 async fn consume_connection(
@@ -128,11 +137,24 @@ async fn consume_connection(
             let tick: CtpdTick = serde_json::from_str(&payload)
                 .map_err(|error| format!("invalid CTPD tick: {error}"))?;
             let _recovery = connection.recovery_gate.lock().await;
-            connection
+            let signals = connection
                 .portfolio
                 .write()
                 .expect("portfolio lock poisoned")
                 .ingest(tick)?;
+            enqueue_live_signals(connection.signal_tx, signals);
+        }
+    }
+}
+
+fn enqueue_live_signals(
+    sender: Option<&mpsc::Sender<LiveTradeSignal>>,
+    signals: Vec<LiveTradeSignal>,
+) {
+    let Some(sender) = sender else { return };
+    for signal in signals {
+        if sender.try_send(signal).is_err() {
+            eprintln!("bullet-live: Linkit notification queue is unavailable");
         }
     }
 }
@@ -650,6 +672,7 @@ mod tests {
             instruments: std::slice::from_ref(&instrument),
             portfolio: &portfolio,
             recovery_gate: &recovery_gate,
+            signal_tx: None,
         };
         let error = consume_connection(&connection, &instrument, false)
             .await

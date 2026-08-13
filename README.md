@@ -25,6 +25,11 @@ Tick 延续状态，并暴露 1Exchange Remote Account Source 所需的账户、
 与当前目标合约之间的显式映射。`target_instrument_id` 到期前由部署负责人换月；运行器
 绝不会把 `8888` 自动猜成可交易合约。
 
+如配置可选的 `[linkit]`，运行器只会在实时 CTPD 路径里、仲裁器实际开仓、平仓或替换
+活跃目标账本时通知该用户名。Parquet 启动回放、CTPD Kline 恢复、被拒候选与行情失联
+清仓均不会通知。Bot Token 使用 `bearer_token_file` 指向仅 `bullet` 服务用户可读的
+`0600` 文件；通知使用有界异步队列，Linkit 故障不会阻塞或改变推理与目标仓位。
+
 `history_seed_bars` 必须覆盖每个文件的完整可用历史，默认 1,000,000。缩短它会改变
 默认仲裁器的成熟标签历史，不是一个可接受的性能开关。
 

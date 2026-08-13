@@ -64,6 +64,21 @@ pub struct TargetPosition {
     pub updated_at_ms: i64,
 }
 
+/// A fill emitted only by the real-time CTPD path after the arbitrator has
+/// accepted it into, or removed it from, the active target book. Historical
+/// Parquet seeding and CTPD Kline recovery never return this event type.
+#[derive(Clone, Debug, PartialEq)]
+pub struct LiveTradeSignal {
+    pub candidate_id: String,
+    pub symbol: String,
+    pub target_instrument_id: String,
+    pub side: String,
+    pub action: &'static str,
+    pub contracts: f64,
+    pub price: f64,
+    pub at_ns: u64,
+}
+
 #[derive(Clone, Debug)]
 struct MarketBar {
     timestamp_ns: u64,
@@ -1234,8 +1249,14 @@ impl Arbitrator {
         }
     }
 
-    fn record_fill(&mut self, candidate: &Candidate, opening: bool, price: f64, at_ns: u64) {
-        self.fills.push(ExecutedFill {
+    fn record_fill(
+        &mut self,
+        candidate: &Candidate,
+        opening: bool,
+        price: f64,
+        at_ns: u64,
+    ) -> ExecutedFill {
+        let fill = ExecutedFill {
             candidate_id: candidate.id.clone(),
             symbol: candidate.symbol.clone(),
             side: candidate.side,
@@ -1243,13 +1264,21 @@ impl Arbitrator {
             weight: candidate.weight,
             price,
             at_ns,
-        });
+        };
+        self.fills.push(fill.clone());
+        fill
     }
 
-    fn resolve_label(&mut self, candidate: Candidate, exit_price: f64, at_ns: u64) {
-        if let Some(active) = self.active.remove(&candidate.id) {
-            self.record_fill(&active, false, exit_price, at_ns);
-        }
+    fn resolve_label(
+        &mut self,
+        candidate: Candidate,
+        exit_price: f64,
+        at_ns: u64,
+    ) -> Option<ExecutedFill> {
+        let fill = self
+            .active
+            .remove(&candidate.id)
+            .map(|active| self.record_fill(&active, false, exit_price, at_ns));
         let trade_return =
             candidate.side.raw_return(candidate.entry_price, exit_price) - ROUND_TRIP_COST;
         if self.capture_ledger {
@@ -1270,13 +1299,14 @@ impl Arbitrator {
             .entry(at_ns)
             .or_default()
             .push((candidate, trade_return));
+        fill
     }
 
     fn decide(
         &mut self,
         mut candidate: Candidate,
         replacement_prices: &BTreeMap<String, f64>,
-    ) -> Option<(Candidate, f64)> {
+    ) -> Vec<ExecutedFill> {
         self.mature_before(candidate.entry_time_ns);
         let (prediction, history_count, prediction_key, history_max_label_available_ns) =
             self.predict(&candidate);
@@ -1308,17 +1338,17 @@ impl Arbitrator {
         if prediction <= 0.0 {
             decision.reject_reason = Some("prediction_non_positive".into());
             self.record_decision(decision);
-            return None;
+            return Vec::new();
         }
         if self.recovery_gate(&candidate, prediction) {
             decision.reject_reason = Some("recovery_weak_nearvwap_gate".into());
             self.record_decision(decision);
-            return None;
+            return Vec::new();
         }
         if self.idle_gate(&candidate) {
             decision.reject_reason = Some("idle_midheat_gate".into());
             self.record_decision(decision);
-            return None;
+            return Vec::new();
         }
         // Python stores this entry-time value in `_parallel_pred`; later
         // labels must not re-score an incumbent during replacement.
@@ -1337,7 +1367,7 @@ impl Arbitrator {
         decision.candidate_weight = candidate_weight;
         decision.same_symbol_count = same_symbol.len();
         if same_symbol_is_empty && used + candidate_weight <= 1.0 + 1e-12 {
-            self.record_fill(
+            let fill = self.record_fill(
                 &candidate,
                 true,
                 candidate.entry_price,
@@ -1348,7 +1378,7 @@ impl Arbitrator {
             decision.capital_ok = Some(true);
             decision.symbol_ok = Some(true);
             self.record_decision(decision);
-            return None;
+            return vec![fill];
         }
         let pool = if same_symbol_is_empty {
             self.active
@@ -1375,7 +1405,7 @@ impl Arbitrator {
             decision.capital_ok = Some(used + candidate_weight <= 1.0 + 1e-12);
             decision.symbol_ok = Some(true);
             self.record_decision(decision);
-            return None;
+            return Vec::new();
         };
         let incumbent = self.active.get(&incumbent_id).expect("incumbent exists");
         let incumbent_prediction = incumbent.prediction;
@@ -1401,18 +1431,18 @@ impl Arbitrator {
         if !capital_ok {
             decision.reject_reason = Some("replacement_capital_blocked".into());
             self.record_decision(decision);
-            return None;
+            return Vec::new();
         }
         if prediction < incumbent_prediction + margin {
             decision.reject_reason = Some("replacement_margin_not_met".into());
             self.record_decision(decision);
-            return None;
+            return Vec::new();
         }
         if let Some(price) = replacement_prices.get(&incumbent.symbol).copied() {
             let incumbent = incumbent.clone();
             self.active.remove(&incumbent_id);
-            self.record_fill(&incumbent, false, price, candidate.entry_time_ns);
-            self.record_fill(
+            let close = self.record_fill(&incumbent, false, price, candidate.entry_time_ns);
+            let open = self.record_fill(
                 &candidate,
                 true,
                 candidate.entry_price,
@@ -1421,11 +1451,11 @@ impl Arbitrator {
             self.active.insert(candidate.id.clone(), candidate);
             decision.decision = "accepted".into();
             self.record_decision(decision);
-            return Some((incumbent, price));
+            return vec![close, open];
         }
         decision.reject_reason = Some("replacement_execution_price_missing".into());
         self.record_decision(decision);
-        None
+        Vec::new()
     }
 
     fn mature_before(&mut self, as_of_ns: u64) {
@@ -1556,7 +1586,7 @@ impl Portfolio {
             .set_history_day_bar_counts(bars)
     }
 
-    pub fn ingest(&mut self, tick: CtpdTick) -> Result<(), String> {
+    pub fn ingest(&mut self, tick: CtpdTick) -> Result<Vec<LiveTradeSignal>, String> {
         let timestamp_ns = tick_timestamp_ns(&tick)?;
         let id = tick.instrument_id.clone();
         let events = self
@@ -1567,8 +1597,11 @@ impl Portfolio {
         if !events.is_empty() {
             self.observe_history(timestamp_ns);
         }
-        self.apply(events, true);
-        Ok(())
+        let fills = self.apply(events, true);
+        Ok(fills
+            .into_iter()
+            .map(|fill| self.live_signal(fill))
+            .collect())
     }
 
     pub fn ingest_history(
@@ -1625,7 +1658,8 @@ impl Portfolio {
         Ok(())
     }
 
-    fn apply(&mut self, events: Vec<ModelEvent>, flush_candidates: bool) {
+    fn apply(&mut self, events: Vec<ModelEvent>, flush_candidates: bool) -> Vec<ExecutedFill> {
+        let mut fills = Vec::new();
         for event in events {
             match event {
                 ModelEvent::Candidate(candidate) => self
@@ -1637,17 +1671,19 @@ impl Portfolio {
                     candidate,
                     exit_price,
                     at_ns,
-                } => self.arbitrator.resolve_label(candidate, exit_price, at_ns),
+                } => fills.extend(self.arbitrator.resolve_label(candidate, exit_price, at_ns)),
                 ModelEvent::Price => {}
             }
         }
         if flush_candidates {
-            self.flush_candidates();
+            fills.extend(self.flush_candidates());
         }
         self.publish_targets();
+        fills
     }
 
-    fn flush_candidates(&mut self) {
+    fn flush_candidates(&mut self) -> Vec<ExecutedFill> {
+        let mut fills = Vec::new();
         // Candidate time, not the slowest market feed, is the lab0334
         // decision clock.  Python's ordered candidate ledger permits a
         // symbol to trade when another continuous series has no bar at that
@@ -1677,8 +1713,34 @@ impl Portfolio {
                     continue;
                 }
                 let prices = self.open_prices_at(candidate.entry_time_ns);
-                let _ = self.arbitrator.decide(candidate, &prices);
+                fills.extend(self.arbitrator.decide(candidate, &prices));
             }
+        }
+        fills
+    }
+
+    fn live_signal(&self, fill: ExecutedFill) -> LiveTradeSignal {
+        let market_id = self
+            .symbols
+            .get(&fill.symbol)
+            .expect("active fill symbol has a configured market");
+        let model = self
+            .models
+            .get(market_id)
+            .expect("configured market has a model");
+        LiveTradeSignal {
+            candidate_id: fill.candidate_id,
+            symbol: fill.symbol,
+            target_instrument_id: model.config.target_instrument_id.clone(),
+            side: match fill.side {
+                Side::Long => "LONG",
+                Side::Short => "SHORT",
+            }
+            .into(),
+            action: if fill.opening { "OPEN" } else { "CLOSE" },
+            contracts: model.config.full_weight_contracts * fill.weight,
+            price: fill.price,
+            at_ns: fill.at_ns,
         }
     }
 
@@ -2331,6 +2393,79 @@ mod tests {
     }
 
     #[test]
+    fn emits_live_signals_only_for_accepted_active_book_fills() {
+        let config = config("IM8888", "IDX-CFFEX-IM", "IM2609");
+        let mut portfolio = Portfolio::default();
+        portfolio.insert(
+            config.market_instrument_id.clone(),
+            Portfolio::new_model(&config),
+        );
+        portfolio
+            .arbitrator
+            .histories
+            .insert("global".into(), vec![(0, 0.01)]);
+        portfolio.pending_candidates.insert(
+            1,
+            vec![Candidate {
+                id: "accepted-live-candidate".into(),
+                symbol: "IM8888".into(),
+                side: Side::Long,
+                family: "base",
+                policy: "fixed_hold",
+                weight: 0.30,
+                signal_time_ns: 1,
+                entry_time_ns: 1,
+                entry_price: 4_000.0,
+                prediction: 0.0,
+                exit_plan: ExitPlan::FixedHoldMinutes(1),
+                ret30_signed: 0.0,
+                ret60_signed: 0.0,
+                vwap_signed: 0.0,
+                trend_distance_bps: 0.0,
+            }],
+        );
+
+        let signals = portfolio
+            .flush_candidates()
+            .into_iter()
+            .map(|fill| portfolio.live_signal(fill))
+            .collect::<Vec<_>>();
+
+        assert_eq!(signals.len(), 1);
+        assert_eq!(signals[0].candidate_id, "accepted-live-candidate");
+        assert_eq!(signals[0].action, "OPEN");
+        assert_eq!(signals[0].target_instrument_id, "IM2609");
+        assert_eq!(signals[0].contracts, 10.0);
+
+        portfolio
+            .arbitrator
+            .histories
+            .insert("global".into(), vec![(0, -0.01)]);
+        portfolio.pending_candidates.insert(
+            2,
+            vec![Candidate {
+                id: "rejected-live-candidate".into(),
+                symbol: "IM8888".into(),
+                side: Side::Short,
+                family: "base",
+                policy: "fixed_hold",
+                weight: 0.30,
+                signal_time_ns: 2,
+                entry_time_ns: 2,
+                entry_price: 4_000.0,
+                prediction: 0.0,
+                exit_plan: ExitPlan::FixedHoldMinutes(1),
+                ret30_signed: 0.0,
+                ret60_signed: 0.0,
+                vwap_signed: 0.0,
+                trend_distance_bps: 0.0,
+            }],
+        );
+
+        assert!(portfolio.flush_candidates().is_empty());
+    }
+
+    #[test]
     fn replacement_closes_the_incumbent_before_opening_the_successor() {
         let mut arbitrator = Arbitrator::default();
         arbitrator
@@ -2381,7 +2516,21 @@ mod tests {
         prices.insert("IM8888".into(), 4_010.0);
         let replacement = arbitrator.decide(successor, &prices);
 
-        assert!(matches!(replacement, Some((candidate, 4_010.0)) if candidate.id == "incumbent"));
+        assert_eq!(
+            replacement
+                .iter()
+                .map(|fill| (
+                    fill.candidate_id.as_str(),
+                    fill.opening,
+                    fill.price,
+                    fill.at_ns
+                ))
+                .collect::<Vec<_>>(),
+            vec![
+                ("incumbent", false, 4_010.0, 2),
+                ("successor", true, 4_020.0, 2),
+            ]
+        );
         assert_eq!(
             arbitrator
                 .fills

@@ -21,6 +21,7 @@ pub struct LiveConfig {
     pub history_seed_bars: usize,
     pub ctpd: CtpdConfig,
     pub remote_account: RemoteAccountConfig,
+    pub linkit: Option<LinkitConfig>,
     pub instruments: Vec<InstrumentConfig>,
 }
 
@@ -37,6 +38,15 @@ pub struct RemoteAccountConfig {
     /// its target account is publicly readable.
     pub allow_unauthenticated: bool,
     pub bearer_token_file: Option<PathBuf>,
+}
+
+#[derive(Clone, Debug, Deserialize)]
+pub struct LinkitConfig {
+    /// Linkit Bot API origin. The token remains in a separate one-line file.
+    pub base_url: String,
+    pub bearer_token_file: PathBuf,
+    /// Linkit username, not an Auth Mini user ID.
+    pub recipient_username: String,
 }
 
 #[derive(Clone, Debug, Deserialize)]
@@ -66,6 +76,7 @@ pub struct InstrumentConfig {
 pub struct Secrets {
     pub ctpd_bearer_token: String,
     pub remote_bearer_token: Option<String>,
+    pub linkit_bearer_token: Option<String>,
 }
 
 impl LiveConfig {
@@ -90,11 +101,17 @@ impl LiveConfig {
                 );
             }
         };
+        let linkit_bearer_token = config
+            .linkit
+            .as_ref()
+            .map(|linkit| read_secret(&linkit.bearer_token_file))
+            .transpose()?;
         Ok((
             config,
             Secrets {
                 ctpd_bearer_token,
                 remote_bearer_token,
+                linkit_bearer_token,
             },
         ))
     }
@@ -119,6 +136,11 @@ impl LiveConfig {
         }
         if self.ctpd.base_url.trim().is_empty() || self.ctpd.stale_after_ms == 0 {
             return Err("ctpd base_url and stale_after_ms must be configured".into());
+        }
+        if let Some(linkit) = &self.linkit
+            && (linkit.base_url.trim().is_empty() || linkit.recipient_username.trim().is_empty())
+        {
+            return Err("linkit base_url and recipient_username must be configured".into());
         }
         if self.instruments.len() != LAB0334_SYMBOLS.len() {
             return Err("lab0334 requires exactly IC8888, IF8888, IH8888 and IM8888".into());
@@ -199,6 +221,7 @@ mod tests {
                 allow_unauthenticated: false,
                 bearer_token_file: Some(PathBuf::from("/unused")),
             },
+            linkit: None,
             instruments: vec![
                 instrument("IC8888", "IDX-CFFEX-IC", "IC2609"),
                 instrument("IF8888", "IDX-CFFEX-IF", "IF2609"),
