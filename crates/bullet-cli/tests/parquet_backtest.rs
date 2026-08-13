@@ -173,7 +173,10 @@ fn write_bars(path: &std::path::Path, prices: &[f64]) {
     let schema = Arc::new(Schema::new(vec![
         Field::new(
             "date",
-            DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+            DataType::Timestamp(
+                arrow_schema::TimeUnit::Nanosecond,
+                Some("Asia/Shanghai".into()),
+            ),
             false,
         ),
         Field::new("open", DataType::Float64, false),
@@ -182,13 +185,16 @@ fn write_bars(path: &std::path::Path, prices: &[f64]) {
     let batch = RecordBatch::try_new(
         schema.clone(),
         vec![
-            Arc::new(TimestampNanosecondArray::from(
-                prices
-                    .iter()
-                    .enumerate()
-                    .map(|(index, _)| (index as i64 + 1) * 86_400_000_000_000)
-                    .collect::<Vec<_>>(),
-            )) as ArrayRef,
+            Arc::new(
+                TimestampNanosecondArray::from(
+                    prices
+                        .iter()
+                        .enumerate()
+                        .map(|(index, _)| (index as i64 + 1) * 86_400_000_000_000)
+                        .collect::<Vec<_>>(),
+                )
+                .with_timezone("Asia/Shanghai"),
+            ) as ArrayRef,
             Arc::new(Float64Array::from(prices.to_vec())) as ArrayRef,
             Arc::new(Float64Array::from(prices.to_vec())) as ArrayRef,
         ],

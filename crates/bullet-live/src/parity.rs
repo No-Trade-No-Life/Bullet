@@ -4,9 +4,9 @@ use std::{
     io,
 };
 
-use chrono::{DateTime, Utc};
 use serde::{Deserialize, Serialize, de::DeserializeOwned};
 
+use crate::market_time::market_datetime;
 use crate::model::{CandidateDecision, CandidateLabel, Portfolio};
 
 const DECIMAL_PLACES: usize = 14;
@@ -440,9 +440,7 @@ fn optional_timestamp(value: Option<u64>) -> Result<String, String> {
 }
 
 fn format_timestamp(value: u64) -> Result<String, String> {
-    let timestamp = i64::try_from(value).map_err(|_| "timestamp is outside chrono range")?;
-    Ok(DateTime::<Utc>::from_timestamp_nanos(timestamp)
-        .naive_utc()
+    Ok(market_datetime(value)?
         .format("%Y-%m-%d %H:%M:%S")
         .to_string())
 }

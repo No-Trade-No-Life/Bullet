@@ -18,12 +18,13 @@ const CLOSE_COLUMN: &str = "close";
 const VOLUME_COLUMN: &str = "volume";
 const MONEY_COLUMN: &str = "money";
 const OPEN_INTEREST_COLUMN: &str = "open_interest";
+const MARKET_TIMEZONE: &str = "Asia/Shanghai";
 
 /// A historical bar used to seed a live strategy before CTPD ticks take over.
 ///
-/// `timestamp_ns` deliberately remains the source's timezone-naive market
-/// timestamp so the live runner can apply the Parquet natural-day convention
-/// at its splice boundary.
+/// `timestamp_ns` is the UTC instant encoded by the Parquet `date` column.
+/// The required `Asia/Shanghai` Arrow timezone metadata preserves the CFFEX
+/// market-time interpretation at the file boundary.
 #[derive(Clone, Debug, PartialEq)]
 pub struct HistoryBar {
     pub timestamp_ns: u64,
@@ -159,12 +160,18 @@ fn append_history_batch(bars: &mut Vec<HistoryBar>, batch: &RecordBatch) -> Resu
 }
 
 fn required_date_column(batch: &RecordBatch) -> Result<&TimestampNanosecondArray, DataError> {
-    batch
+    let dates = batch
         .column_by_name(DATE_COLUMN)
         .ok_or(DataError::MissingColumn(DATE_COLUMN))?
         .as_any()
         .downcast_ref::<TimestampNanosecondArray>()
-        .ok_or(DataError::InvalidColumnType(DATE_COLUMN))
+        .ok_or(DataError::InvalidColumnType(DATE_COLUMN))?;
+    (dates.timezone() == Some(MARKET_TIMEZONE))
+        .then_some(dates)
+        .ok_or(DataError::InvalidTimezone {
+            expected: MARKET_TIMEZONE,
+            actual: dates.timezone().map(str::to_owned),
+        })
 }
 
 fn required_f64_column<'a>(
@@ -246,6 +253,10 @@ pub enum DataError {
     Arrow(ArrowError),
     MissingColumn(&'static str),
     InvalidColumnType(&'static str),
+    InvalidTimezone {
+        expected: &'static str,
+        actual: Option<String>,
+    },
     NullValue {
         column: &'static str,
         row: usize,
@@ -283,6 +294,11 @@ impl fmt::Display for DataError {
             Self::InvalidColumnType(column) => {
                 write!(formatter, "column `{column}` has an unsupported type")
             }
+            Self::InvalidTimezone { expected, actual } => write!(
+                formatter,
+                "date must have timezone `{expected}`; found {}",
+                actual.as_deref().unwrap_or("no timezone")
+            ),
             Self::NullValue { column, row } => {
                 write!(formatter, "column `{column}` is null at row {row}")
             }
@@ -321,6 +337,7 @@ impl Error for DataError {
             Self::Arrow(error) => Some(error),
             Self::MissingColumn(_)
             | Self::InvalidColumnType(_)
+            | Self::InvalidTimezone { .. }
             | Self::NullValue { .. }
             | Self::InvalidTimestamp { .. }
             | Self::InvalidPrice { .. }
@@ -341,7 +358,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use parquet::arrow::ArrowWriter;
 
-    use super::read_bars;
+    use super::{read_bars, read_history_tail};
 
     #[test]
     fn reads_date_timestamp_ohlc_columns_from_parquet() {
@@ -356,7 +373,10 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "date",
-                DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(
+                    arrow_schema::TimeUnit::Nanosecond,
+                    Some("Asia/Shanghai".into()),
+                ),
                 false,
             ),
             Field::new("open", DataType::Float64, false),
@@ -366,7 +386,9 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(TimestampNanosecondArray::from(vec![1_i64, 2])) as ArrayRef,
+                Arc::new(
+                    TimestampNanosecondArray::from(vec![1_i64, 2]).with_timezone("Asia/Shanghai"),
+                ) as ArrayRef,
                 Arc::new(Float64Array::from(vec![100.0, 101.0])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![101.0, 102.0])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![10.0, 11.0])) as ArrayRef,
@@ -400,7 +422,10 @@ mod tests {
         let schema = Arc::new(Schema::new(vec![
             Field::new(
                 "date",
-                DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+                DataType::Timestamp(
+                    arrow_schema::TimeUnit::Nanosecond,
+                    Some("Asia/Shanghai".into()),
+                ),
                 false,
             ),
             Field::new("open", DataType::Float64, false),
@@ -414,7 +439,10 @@ mod tests {
         let batch = RecordBatch::try_new(
             schema.clone(),
             vec![
-                Arc::new(TimestampNanosecondArray::from(vec![1_i64, 2, 3])) as ArrayRef,
+                Arc::new(
+                    TimestampNanosecondArray::from(vec![1_i64, 2, 3])
+                        .with_timezone("Asia/Shanghai"),
+                ) as ArrayRef,
                 Arc::new(Float64Array::from(vec![100.0, 101.0, 102.0])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![101.0, 102.0, 103.0])) as ArrayRef,
                 Arc::new(Float64Array::from(vec![99.0, 100.0, 101.0])) as ArrayRef,
@@ -430,11 +458,53 @@ mod tests {
         writer.write(&batch).expect("writer accepts batch");
         writer.close().expect("writer writes footer");
 
-        let bars = super::read_history_tail(&path, 2).expect("history tail is read");
+        let bars = read_history_tail(&path, 2).expect("history tail is read");
         std::fs::remove_file(&path).expect("temporary parquet file is removed");
 
         assert_eq!(bars.len(), 2);
         assert_eq!(bars[0].timestamp_ns, 2);
         assert_eq!(bars[1].open_interest, 12.0);
+    }
+
+    #[test]
+    fn rejects_a_timestamp_column_without_the_market_timezone() {
+        let path = std::env::temp_dir().join(format!(
+            "bullet-data-timezone-{}-{}.parquet",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "date",
+                DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+                false,
+            ),
+            Field::new("open", DataType::Float64, false),
+            Field::new("close", DataType::Float64, false),
+        ]));
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(TimestampNanosecondArray::from(vec![1_i64])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![100.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![100.0])) as ArrayRef,
+            ],
+        )
+        .expect("test batch has a valid schema");
+        let file = File::create(&path).expect("temporary parquet file is writable");
+        let mut writer = ArrowWriter::try_new(file, schema, None).expect("writer initializes");
+        writer.write(&batch).expect("writer accepts batch");
+        writer.close().expect("writer writes footer");
+
+        let error = read_bars(&path).expect_err("timezone-less Parquet must be rejected");
+        std::fs::remove_file(&path).expect("temporary parquet file is removed");
+
+        assert_eq!(
+            error.to_string(),
+            "date must have timezone `Asia/Shanghai`; found no timezone"
+        );
     }
 }
