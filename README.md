@@ -21,6 +21,35 @@ real-time data ────> ordered event stream ──> live model ─> target
 
 Historical replay produces reproducible research results. A live adapter is responsible for receiving real-time market events and converting the resulting target state into its declared downstream interface. It must not change event ordering or use information unavailable at the decision time.
 
+## Fixed-capital research replay
+
+`bullet_backtest::fixed_capital` is the component-level research surface for
+strategies whose output is a fixed-capital return stream rather than an integer
+contract account. It provides:
+
+- complete OHLCV, money, and open-interest bars;
+- one deterministic callback containing every instrument at the same timestamp;
+- independent, fractional, overlapping component exposures;
+- next-bar-open entry, scheduled open/close exit, and a
+  pre-registered gap-aware stop;
+- a proportional cost fraction on every exposure; and
+- component trades, censored exposures, twelve-decimal daily returns, and
+  sample-volatility Sharpe metrics.
+
+The evaluation calendar and ordered component list are explicit configuration.
+An unregistered component is rejected, while a registered zero-trade component
+keeps its zero-valued daily column. This makes canonical CSV comparison stable.
+
+The Parquet timestamp interpretation is mandatory. Production-style files must
+declare `Asia/Shanghai`; timezone-less research snapshots require the explicit
+`TimestampInterpretation::NaiveAsiaShanghaiWallClock` option. Bullet never
+guesses this boundary or silently applies a fallback.
+
+The legacy `Strategy`, `Order`, and self-financing contract-accounting API stays
+unchanged for existing CLI strategies. The two accounting models are separate
+public surfaces because merging them would change return denominators and cost
+semantics.
+
 ## Backtest quick start
 
 The bundled dual-moving-average strategy and `IM8888` configuration are examples only.

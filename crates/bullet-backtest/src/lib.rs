@@ -1,5 +1,7 @@
 //! Deterministic, configuration-driven bar backtesting for Bullet strategies.
 
+pub mod fixed_capital;
+
 use std::collections::BTreeMap;
 use std::error::Error;
 use std::fmt;
