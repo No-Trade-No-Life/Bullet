@@ -3,6 +3,7 @@
 use std::error::Error;
 use std::path::Path;
 
+pub use bullet_backtest::fixed_capital;
 pub use bullet_backtest::{BarContext, Config, Order, Strategy};
 pub use bullet_core::Bar;
 

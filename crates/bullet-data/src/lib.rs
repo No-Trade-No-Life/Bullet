@@ -19,8 +19,20 @@ const VOLUME_COLUMN: &str = "volume";
 const MONEY_COLUMN: &str = "money";
 const OPEN_INTEREST_COLUMN: &str = "open_interest";
 const MARKET_TIMEZONE: &str = "Asia/Shanghai";
+const ASIA_SHANGHAI_OFFSET_NS: i64 = 8 * 60 * 60 * 1_000_000_000;
 
-/// A historical bar used to seed a live strategy before CTPD ticks take over.
+/// Declares how a Parquet timestamp is encoded at the data boundary.
+///
+/// Bullet never guesses between an instant and a wall-clock value. Research
+/// snapshots with timezone-less Shanghai wall clocks must opt into
+/// [`Self::NaiveAsiaShanghaiWallClock`] explicitly.
+#[derive(Clone, Copy, Debug, Eq, PartialEq)]
+pub enum TimestampInterpretation {
+    AsiaShanghaiInstant,
+    NaiveAsiaShanghaiWallClock,
+}
+
+/// A complete historical bar used by research replay and live-state seeding.
 ///
 /// `timestamp_ns` is the UTC instant encoded by the Parquet `date` column.
 /// The required `Asia/Shanghai` Arrow timezone metadata preserves the CFFEX
@@ -46,10 +58,36 @@ pub fn read_bars(path: impl AsRef<Path>) -> Result<Vec<Bar>, DataError> {
     let mut bars = Vec::new();
 
     for batch in reader {
-        append_batch(&mut bars, &batch.map_err(DataError::Arrow)?)?;
+        append_batch(
+            &mut bars,
+            &batch.map_err(DataError::Arrow)?,
+            TimestampInterpretation::AsiaShanghaiInstant,
+        )?;
     }
 
     validate_timestamps(&bars)?;
+    Ok(bars)
+}
+
+/// Reads complete OHLCV, money and open-interest history for research replay.
+///
+/// The timestamp interpretation is mandatory so timezone-less research
+/// snapshots cannot be silently shifted by eight hours.
+pub fn read_history(
+    path: impl AsRef<Path>,
+    interpretation: TimestampInterpretation,
+) -> Result<Vec<HistoryBar>, DataError> {
+    let file = File::open(path).map_err(DataError::Open)?;
+    let reader = ParquetRecordBatchReaderBuilder::try_new(file)
+        .map_err(DataError::Parquet)?
+        .build()
+        .map_err(DataError::Parquet)?;
+    let mut bars = Vec::new();
+
+    for batch in reader {
+        append_history_batch(&mut bars, &batch.map_err(DataError::Arrow)?, interpretation)?;
+    }
+    validate_history_timestamps(&bars)?;
     Ok(bars)
 }
 
@@ -71,20 +109,32 @@ pub fn read_history_tail(
     let mut bars = Vec::new();
 
     for batch in reader {
-        append_history_batch(&mut bars, &batch.map_err(DataError::Arrow)?)?;
+        append_history_batch(
+            &mut bars,
+            &batch.map_err(DataError::Arrow)?,
+            TimestampInterpretation::AsiaShanghaiInstant,
+        )?;
     }
     validate_history_timestamps(&bars)?;
     let start = bars.len().saturating_sub(maximum);
     Ok(bars.split_off(start))
 }
 
-fn append_batch(bars: &mut Vec<Bar>, batch: &RecordBatch) -> Result<(), DataError> {
-    let dates = required_date_column(batch)?;
+fn append_batch(
+    bars: &mut Vec<Bar>,
+    batch: &RecordBatch,
+    interpretation: TimestampInterpretation,
+) -> Result<(), DataError> {
+    let dates = required_date_column(batch, interpretation)?;
     let opens = required_f64_column(batch, OPEN_COLUMN)?;
     let closes = required_f64_column(batch, CLOSE_COLUMN)?;
 
     for row in 0..batch.num_rows() {
-        let timestamp_ns = timestamp_ns(required_value(dates, row, DATE_COLUMN)?, row)?;
+        let timestamp_ns = timestamp_ns(
+            required_value(dates, row, DATE_COLUMN)?,
+            row,
+            interpretation,
+        )?;
         let open = price(required_value(opens, row, OPEN_COLUMN)?, row, OPEN_COLUMN)?;
         let close = price(
             required_value(closes, row, CLOSE_COLUMN)?,
@@ -97,8 +147,12 @@ fn append_batch(bars: &mut Vec<Bar>, batch: &RecordBatch) -> Result<(), DataErro
     Ok(())
 }
 
-fn append_history_batch(bars: &mut Vec<HistoryBar>, batch: &RecordBatch) -> Result<(), DataError> {
-    let dates = required_date_column(batch)?;
+fn append_history_batch(
+    bars: &mut Vec<HistoryBar>,
+    batch: &RecordBatch,
+    interpretation: TimestampInterpretation,
+) -> Result<(), DataError> {
+    let dates = required_date_column(batch, interpretation)?;
     let opens = required_f64_column(batch, OPEN_COLUMN)?;
     let highs = required_f64_column(batch, HIGH_COLUMN)?;
     let lows = required_f64_column(batch, LOW_COLUMN)?;
@@ -108,7 +162,11 @@ fn append_history_batch(bars: &mut Vec<HistoryBar>, batch: &RecordBatch) -> Resu
     let open_interest = required_f64_column(batch, OPEN_INTEREST_COLUMN)?;
 
     for row in 0..batch.num_rows() {
-        let timestamp_ns = timestamp_ns(required_value(dates, row, DATE_COLUMN)?, row)?;
+        let timestamp_ns = timestamp_ns(
+            required_value(dates, row, DATE_COLUMN)?,
+            row,
+            interpretation,
+        )?;
         let open = finite(required_value(opens, row, OPEN_COLUMN)?, row, OPEN_COLUMN)?;
         let high = finite(required_value(highs, row, HIGH_COLUMN)?, row, HIGH_COLUMN)?;
         let low = finite(required_value(lows, row, LOW_COLUMN)?, row, LOW_COLUMN)?;
@@ -159,17 +217,24 @@ fn append_history_batch(bars: &mut Vec<HistoryBar>, batch: &RecordBatch) -> Resu
     Ok(())
 }
 
-fn required_date_column(batch: &RecordBatch) -> Result<&TimestampNanosecondArray, DataError> {
+fn required_date_column(
+    batch: &RecordBatch,
+    interpretation: TimestampInterpretation,
+) -> Result<&TimestampNanosecondArray, DataError> {
     let dates = batch
         .column_by_name(DATE_COLUMN)
         .ok_or(DataError::MissingColumn(DATE_COLUMN))?
         .as_any()
         .downcast_ref::<TimestampNanosecondArray>()
         .ok_or(DataError::InvalidColumnType(DATE_COLUMN))?;
-    (dates.timezone() == Some(MARKET_TIMEZONE))
+    let expected = match interpretation {
+        TimestampInterpretation::AsiaShanghaiInstant => Some(MARKET_TIMEZONE),
+        TimestampInterpretation::NaiveAsiaShanghaiWallClock => None,
+    };
+    (dates.timezone() == expected)
         .then_some(dates)
         .ok_or(DataError::InvalidTimezone {
-            expected: MARKET_TIMEZONE,
+            expected,
             actual: dates.timezone().map(str::to_owned),
         })
 }
@@ -212,8 +277,18 @@ impl ArrayValue<f64> for Float64Array {
     }
 }
 
-fn timestamp_ns(value: i64, row: usize) -> Result<u64, DataError> {
-    u64::try_from(value).map_err(|_| DataError::InvalidTimestamp { row, value })
+fn timestamp_ns(
+    value: i64,
+    row: usize,
+    interpretation: TimestampInterpretation,
+) -> Result<u64, DataError> {
+    let instant = match interpretation {
+        TimestampInterpretation::AsiaShanghaiInstant => value,
+        TimestampInterpretation::NaiveAsiaShanghaiWallClock => value
+            .checked_sub(ASIA_SHANGHAI_OFFSET_NS)
+            .ok_or(DataError::InvalidTimestamp { row, value })?,
+    };
+    u64::try_from(instant).map_err(|_| DataError::InvalidTimestamp { row, value })
 }
 
 fn price(value: f64, row: usize, column: &'static str) -> Result<Price, DataError> {
@@ -254,7 +329,7 @@ pub enum DataError {
     MissingColumn(&'static str),
     InvalidColumnType(&'static str),
     InvalidTimezone {
-        expected: &'static str,
+        expected: Option<&'static str>,
         actual: Option<String>,
     },
     NullValue {
@@ -294,11 +369,18 @@ impl fmt::Display for DataError {
             Self::InvalidColumnType(column) => {
                 write!(formatter, "column `{column}` has an unsupported type")
             }
-            Self::InvalidTimezone { expected, actual } => write!(
-                formatter,
-                "date must have timezone `{expected}`; found {}",
-                actual.as_deref().unwrap_or("no timezone")
-            ),
+            Self::InvalidTimezone { expected, actual } => match expected {
+                Some(expected) => write!(
+                    formatter,
+                    "date must have timezone `{expected}`; found {}",
+                    actual.as_deref().unwrap_or("no timezone")
+                ),
+                None => write!(
+                    formatter,
+                    "date must be timezone-less; found `{}`",
+                    actual.as_deref().unwrap_or("no timezone")
+                ),
+            },
             Self::NullValue { column, row } => {
                 write!(formatter, "column `{column}` is null at row {row}")
             }
@@ -358,7 +440,7 @@ mod tests {
     use arrow_schema::{DataType, Field, Schema};
     use parquet::arrow::ArrowWriter;
 
-    use super::{read_bars, read_history_tail};
+    use super::{TimestampInterpretation, read_bars, read_history, read_history_tail};
 
     #[test]
     fn reads_date_timestamp_ohlc_columns_from_parquet() {
@@ -506,5 +588,56 @@ mod tests {
             error.to_string(),
             "date must have timezone `Asia/Shanghai`; found no timezone"
         );
+    }
+
+    #[test]
+    fn explicitly_maps_naive_shanghai_wall_clock_to_the_utc_instant() {
+        let path = std::env::temp_dir().join(format!(
+            "bullet-data-naive-shanghai-{}-{}.parquet",
+            std::process::id(),
+            std::time::SystemTime::now()
+                .duration_since(std::time::UNIX_EPOCH)
+                .expect("system clock is after the Unix epoch")
+                .as_nanos()
+        ));
+        let schema = Arc::new(Schema::new(vec![
+            Field::new(
+                "date",
+                DataType::Timestamp(arrow_schema::TimeUnit::Nanosecond, None),
+                false,
+            ),
+            Field::new("open", DataType::Float64, false),
+            Field::new("high", DataType::Float64, false),
+            Field::new("low", DataType::Float64, false),
+            Field::new("close", DataType::Float64, false),
+            Field::new("volume", DataType::Float64, false),
+            Field::new("money", DataType::Float64, false),
+            Field::new("open_interest", DataType::Float64, false),
+        ]));
+        let eight_hours_ns = 8_i64 * 60 * 60 * 1_000_000_000;
+        let batch = RecordBatch::try_new(
+            schema.clone(),
+            vec![
+                Arc::new(TimestampNanosecondArray::from(vec![eight_hours_ns])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![100.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![101.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![99.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![100.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![10.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![1_000.0])) as ArrayRef,
+                Arc::new(Float64Array::from(vec![20.0])) as ArrayRef,
+            ],
+        )
+        .expect("test batch has a valid schema");
+        let file = File::create(&path).expect("temporary parquet file is writable");
+        let mut writer = ArrowWriter::try_new(file, schema, None).expect("writer initializes");
+        writer.write(&batch).expect("writer accepts batch");
+        writer.close().expect("writer writes footer");
+
+        let bars = read_history(&path, TimestampInterpretation::NaiveAsiaShanghaiWallClock)
+            .expect("explicit naive Shanghai history is accepted");
+        std::fs::remove_file(&path).expect("temporary parquet file is removed");
+
+        assert_eq!(bars[0].timestamp_ns, 0);
     }
 }
