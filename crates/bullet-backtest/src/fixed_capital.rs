@@ -82,6 +82,29 @@ pub trait FixedCapitalStrategy {
         &mut self,
         context: FixedCapitalContext<'_>,
     ) -> Result<Vec<ExposureOrder>, String>;
+
+    /// Applies information that became causally available after submission.
+    /// Updates run after orders and before the current close.
+    fn on_exposure_updates(
+        &mut self,
+        _context: FixedCapitalContext<'_>,
+    ) -> Result<Vec<ExposureUpdate>, String> {
+        Ok(Vec::new())
+    }
+}
+
+#[derive(Clone, Debug, PartialEq)]
+pub enum ExposureUpdate {
+    ScheduleExit {
+        id: String,
+        exit: ExitPlan,
+        additional_cost_fraction: f64,
+    },
+    SetAllocation {
+        id: String,
+        component_scale: f64,
+        instrument_weight: f64,
+    },
 }
 
 #[derive(Clone, Copy, Debug, Eq, PartialEq)]
@@ -98,6 +121,7 @@ pub enum ScheduledFill {
 
 #[derive(Clone, Copy, Debug, PartialEq)]
 pub enum ExitPlan {
+    OpenEnded,
     At {
         timestamp_ns: u64,
         fill: ScheduledFill,
@@ -110,18 +134,19 @@ pub enum ExitPlan {
 }
 
 impl ExitPlan {
-    fn scheduled(self) -> (u64, ScheduledFill) {
+    fn scheduled(self) -> Option<(u64, ScheduledFill)> {
         match self {
+            Self::OpenEnded => None,
             Self::At { timestamp_ns, fill }
             | Self::StopOrAt {
                 timestamp_ns, fill, ..
-            } => (timestamp_ns, fill),
+            } => Some((timestamp_ns, fill)),
         }
     }
 
     fn stop(self) -> Option<f64> {
         match self {
-            Self::At { .. } => None,
+            Self::OpenEnded | Self::At { .. } => None,
             Self::StopOrAt { stop_price, .. } => Some(stop_price),
         }
     }
@@ -329,6 +354,13 @@ fn run_fixed_capital_history_inner<S: FixedCapitalStrategy>(
             })
             .map_err(FixedCapitalError::Strategy)?;
         state.submit(timestamp_ns, &batch, orders)?;
+        let updates = strategy
+            .on_exposure_updates(FixedCapitalContext {
+                timestamp_ns,
+                bars: &batch,
+            })
+            .map_err(FixedCapitalError::Strategy)?;
+        state.update_exposures(timestamp_ns, updates)?;
         state.process_close(timestamp_ns, &batch)?;
     }
 
@@ -437,6 +469,97 @@ impl ReplayState {
         Ok(())
     }
 
+    fn update_exposures(
+        &mut self,
+        timestamp_ns: u64,
+        mut updates: Vec<ExposureUpdate>,
+    ) -> Result<(), FixedCapitalError> {
+        updates.sort_by_key(update_key);
+        let mut keys = BTreeSet::new();
+        for update in updates {
+            let id = match &update {
+                ExposureUpdate::ScheduleExit { id, .. }
+                | ExposureUpdate::SetAllocation { id, .. } => id,
+            };
+            if id.is_empty() || !keys.insert(update_key(&update)) {
+                return Err(FixedCapitalError::InvalidExposureUpdate(id.clone()));
+            }
+            match update {
+                ExposureUpdate::ScheduleExit {
+                    id,
+                    exit,
+                    additional_cost_fraction,
+                } => self.schedule_exit(timestamp_ns, id, exit, additional_cost_fraction)?,
+                ExposureUpdate::SetAllocation {
+                    id,
+                    component_scale,
+                    instrument_weight,
+                } => self.set_allocation(id, component_scale, instrument_weight)?,
+            }
+        }
+        Ok(())
+    }
+
+    fn schedule_exit(
+        &mut self,
+        timestamp_ns: u64,
+        id: String,
+        exit: ExitPlan,
+        additional_cost_fraction: f64,
+    ) -> Result<(), FixedCapitalError> {
+        let active = self
+            .active
+            .get_mut(&id)
+            .ok_or_else(|| FixedCapitalError::InactiveExposure(id.clone()))?;
+        if active.pending.order.exit != ExitPlan::OpenEnded {
+            return Err(FixedCapitalError::InvalidExposureUpdate(id));
+        }
+        let (exit_timestamp, fill) = exit
+            .scheduled()
+            .ok_or_else(|| FixedCapitalError::InvalidExposureUpdate(id.clone()))?;
+        let causal = exit_timestamp > timestamp_ns
+            || (exit_timestamp == timestamp_ns && fill == ScheduledFill::Close);
+        if !causal || !additional_cost_fraction.is_finite() || additional_cost_fraction < 0.0 {
+            return Err(FixedCapitalError::InvalidExposureUpdate(id));
+        }
+        active.pending.order.cost_fraction += additional_cost_fraction;
+        if !active.pending.order.cost_fraction.is_finite()
+            || active.pending.order.cost_fraction >= 1.0
+        {
+            return Err(FixedCapitalError::InvalidExposureUpdate(id));
+        }
+        active.pending.order.exit = exit;
+        let key = (exit_timestamp, active.pending.order.instrument.clone());
+        match fill {
+            ScheduledFill::Open => self.scheduled_open.entry(key).or_default(),
+            ScheduledFill::Close => self.scheduled_close.entry(key).or_default(),
+        }
+        .push(id);
+        Ok(())
+    }
+
+    fn set_allocation(
+        &mut self,
+        id: String,
+        component_scale: f64,
+        instrument_weight: f64,
+    ) -> Result<(), FixedCapitalError> {
+        if !component_scale.is_finite()
+            || component_scale <= 0.0
+            || !instrument_weight.is_finite()
+            || instrument_weight <= 0.0
+        {
+            return Err(FixedCapitalError::InvalidExposureUpdate(id));
+        }
+        let active = self
+            .active
+            .get_mut(&id)
+            .ok_or_else(|| FixedCapitalError::InactiveExposure(id.clone()))?;
+        active.pending.order.component_scale = component_scale;
+        active.pending.order.instrument_weight = instrument_weight;
+        Ok(())
+    }
+
     fn process_stops(
         &mut self,
         timestamp_ns: u64,
@@ -496,8 +619,8 @@ impl ReplayState {
         timestamp_ns: u64,
         price: f64,
     ) -> Result<(), FixedCapitalError> {
-        let (exit_timestamp, exit_fill) = pending.order.exit.scheduled();
-        if exit_timestamp <= timestamp_ns {
+        let scheduled = pending.order.exit.scheduled();
+        if scheduled.is_some_and(|(exit_timestamp, _)| exit_timestamp <= timestamp_ns) {
             return Err(FixedCapitalError::ExitNotAfterEntry(pending.order.id));
         }
         if pending.order.exit.stop().is_some() {
@@ -506,12 +629,14 @@ impl ReplayState {
                 .or_default()
                 .insert(pending.order.id.clone());
         }
-        let key = (exit_timestamp, pending.order.instrument.clone());
-        match exit_fill {
-            ScheduledFill::Open => self.scheduled_open.entry(key).or_default(),
-            ScheduledFill::Close => self.scheduled_close.entry(key).or_default(),
+        if let Some((exit_timestamp, exit_fill)) = scheduled {
+            let key = (exit_timestamp, pending.order.instrument.clone());
+            match exit_fill {
+                ScheduledFill::Open => self.scheduled_open.entry(key).or_default(),
+                ScheduledFill::Close => self.scheduled_close.entry(key).or_default(),
+            }
+            .push(pending.order.id.clone());
         }
-        .push(pending.order.id.clone());
         self.active.insert(
             pending.order.id.clone(),
             ActiveExposure {
@@ -535,7 +660,10 @@ impl ReplayState {
             .remove(id)
             .ok_or_else(|| FixedCapitalError::InactiveExposure(id.to_owned()))?;
         let order = &active.pending.order;
-        let scheduled = order.exit.scheduled();
+        let scheduled = order
+            .exit
+            .scheduled()
+            .expect("completed exposure is scheduled");
         let key = (scheduled.0, order.instrument.clone());
         let schedule = match scheduled.1 {
             ScheduledFill::Open => &mut self.scheduled_open,
@@ -746,8 +874,11 @@ fn validate_order(
             "cost_fraction must be finite and in [0, 1)".to_owned(),
         ));
     }
-    let (exit_timestamp, _) = order.exit.scheduled();
-    if exit_timestamp <= timestamp_ns {
+    if order
+        .exit
+        .scheduled()
+        .is_some_and(|(exit_timestamp, _)| exit_timestamp <= timestamp_ns)
+    {
         return Err(FixedCapitalError::ExitNotAfterSignal(order.id.clone()));
     }
     if let Some(stop) = order.exit.stop()
@@ -772,6 +903,13 @@ fn remove_id(schedules: &mut BTreeMap<(u64, String), Vec<String>>, key: &(u64, S
         if ids.is_empty() {
             schedules.remove(key);
         }
+    }
+}
+
+fn update_key(update: &ExposureUpdate) -> (String, u8) {
+    match update {
+        ExposureUpdate::SetAllocation { id, .. } => (id.clone(), 0),
+        ExposureUpdate::ScheduleExit { id, .. } => (id.clone(), 1),
     }
 }
 
@@ -1068,6 +1206,7 @@ pub enum FixedCapitalError {
     DuplicateExposure(String),
     UnknownInstrument(String),
     UnknownComponent(String),
+    InvalidExposureUpdate(String),
     ExitNotAfterSignal(String),
     ExitNotAfterEntry(String),
     InvalidStop(String),
@@ -1104,6 +1243,9 @@ impl fmt::Display for FixedCapitalError {
             }
             Self::UnknownComponent(component) => {
                 write!(formatter, "unregistered component `{component}`")
+            }
+            Self::InvalidExposureUpdate(id) => {
+                write!(formatter, "invalid update for exposure `{id}`")
             }
             Self::ExitNotAfterSignal(id) => {
                 write!(formatter, "exposure `{id}` exits no later than its signal")
@@ -1161,8 +1303,8 @@ mod tests {
     use bullet_data::HistoryBar;
 
     use super::{
-        ExitPlan, ExposureOrder, ExposureSide, FixedCapitalContext, FixedCapitalError,
-        FixedCapitalStrategy, InstrumentHistory, ScheduledFill, TradingDay,
+        ExitPlan, ExposureOrder, ExposureSide, ExposureUpdate, FixedCapitalContext,
+        FixedCapitalError, FixedCapitalStrategy, InstrumentHistory, ScheduledFill, TradingDay,
         run_fixed_capital_history,
     };
 
@@ -1715,6 +1857,216 @@ mod tests {
             FixedCapitalError::UnknownComponent(component)
                 if component == "observed_component"
         ));
+    }
+
+    #[test]
+    fn applies_a_later_causal_cost_update_before_the_scheduled_exit() {
+        struct UpdatingStrategy {
+            order: Option<ExposureOrder>,
+            update_timestamp: u64,
+            update: Option<ExposureUpdate>,
+        }
+        impl FixedCapitalStrategy for UpdatingStrategy {
+            fn on_timestamp(
+                &mut self,
+                context: FixedCapitalContext<'_>,
+            ) -> Result<Vec<ExposureOrder>, String> {
+                Ok(
+                    if self.order.is_some() && context.timestamp_ns < self.update_timestamp {
+                        self.order.take().into_iter().collect()
+                    } else {
+                        Vec::new()
+                    },
+                )
+            }
+
+            fn on_exposure_updates(
+                &mut self,
+                context: FixedCapitalContext<'_>,
+            ) -> Result<Vec<ExposureUpdate>, String> {
+                Ok(if context.timestamp_ns == self.update_timestamp {
+                    self.update.take().into_iter().collect()
+                } else {
+                    Vec::new()
+                })
+            }
+        }
+
+        let signal = timestamp(0, 9, 31);
+        let update = timestamp(0, 9, 32);
+        let exit = timestamp(0, 9, 33);
+        let histories = vec![InstrumentHistory {
+            instrument: "A".to_owned(),
+            bars: vec![
+                bar(signal, 100.0, 100.0, 100.0, 100.0),
+                bar(update, 100.0, 100.0, 100.0, 100.0),
+                bar(exit, 100.0, 100.0, 100.0, 100.0),
+            ],
+        }];
+        let mut strategy = UpdatingStrategy {
+            order: Some(order(
+                "updated",
+                "component",
+                "A",
+                ExposureSide::Long,
+                ExitPlan::OpenEnded,
+                0.000123,
+                1.0,
+                1.0,
+            )),
+            update_timestamp: update,
+            update: Some(ExposureUpdate::ScheduleExit {
+                id: "updated".to_owned(),
+                exit: ExitPlan::At {
+                    timestamp_ns: exit,
+                    fill: ScheduledFill::Open,
+                },
+                additional_cost_fraction: 0.000246,
+            }),
+        };
+
+        let result = run_fixed_capital_history(&[day(1)], &histories, 0, &mut strategy)
+            .expect("causal cost update replay completes");
+
+        assert_eq!(result.trades[0].cost_fraction, 0.000369);
+        assert_eq!(result.trades[0].net_return_units, -369_000_000);
+    }
+
+    #[test]
+    fn sets_entry_dependent_allocation_after_the_next_open_fill() {
+        struct AllocationStrategy {
+            order: Option<ExposureOrder>,
+            entry: u64,
+            exit: u64,
+        }
+        impl FixedCapitalStrategy for AllocationStrategy {
+            fn on_timestamp(
+                &mut self,
+                _context: FixedCapitalContext<'_>,
+            ) -> Result<Vec<ExposureOrder>, String> {
+                Ok(self.order.take().into_iter().collect())
+            }
+
+            fn on_exposure_updates(
+                &mut self,
+                context: FixedCapitalContext<'_>,
+            ) -> Result<Vec<ExposureUpdate>, String> {
+                if context.timestamp_ns != self.entry {
+                    return Ok(Vec::new());
+                }
+                let open = context.bars[0].bar.open;
+                Ok(vec![
+                    ExposureUpdate::SetAllocation {
+                        id: "allocation".to_owned(),
+                        component_scale: open / 200.0,
+                        instrument_weight: 0.25,
+                    },
+                    ExposureUpdate::ScheduleExit {
+                        id: "allocation".to_owned(),
+                        exit: ExitPlan::At {
+                            timestamp_ns: self.exit,
+                            fill: ScheduledFill::Open,
+                        },
+                        additional_cost_fraction: 0.0,
+                    },
+                ])
+            }
+        }
+
+        let signal = timestamp(0, 9, 31);
+        let entry = timestamp(0, 9, 32);
+        let exit = timestamp(0, 9, 33);
+        let histories = vec![InstrumentHistory {
+            instrument: "A".to_owned(),
+            bars: vec![
+                bar(signal, 100.0, 100.0, 100.0, 100.0),
+                bar(entry, 150.0, 150.0, 150.0, 150.0),
+                bar(exit, 165.0, 165.0, 165.0, 165.0),
+            ],
+        }];
+        let mut strategy = AllocationStrategy {
+            order: Some(order(
+                "allocation",
+                "component",
+                "A",
+                ExposureSide::Long,
+                ExitPlan::OpenEnded,
+                0.0,
+                1.0,
+                1.0,
+            )),
+            entry,
+            exit,
+        };
+
+        let result = run_fixed_capital_history(&[day(1)], &histories, 0, &mut strategy)
+            .expect("entry-dependent allocation replay completes");
+
+        assert_eq!(result.trades[0].component_scale, 0.75);
+        assert_eq!(result.trades[0].instrument_weight, 0.25);
+        assert_eq!(result.trades[0].weighted_return_units, 18_750_000_000);
+    }
+
+    #[test]
+    fn rejects_a_cost_update_at_the_same_timestamp_as_an_open_exit() {
+        struct LateUpdate {
+            order: Option<ExposureOrder>,
+            exit: u64,
+        }
+        impl FixedCapitalStrategy for LateUpdate {
+            fn on_timestamp(
+                &mut self,
+                _context: FixedCapitalContext<'_>,
+            ) -> Result<Vec<ExposureOrder>, String> {
+                Ok(self.order.take().into_iter().collect())
+            }
+
+            fn on_exposure_updates(
+                &mut self,
+                context: FixedCapitalContext<'_>,
+            ) -> Result<Vec<ExposureUpdate>, String> {
+                Ok((context.timestamp_ns == self.exit)
+                    .then(|| ExposureUpdate::ScheduleExit {
+                        id: "late".to_owned(),
+                        exit: ExitPlan::At {
+                            timestamp_ns: self.exit,
+                            fill: ScheduledFill::Open,
+                        },
+                        additional_cost_fraction: 0.000123,
+                    })
+                    .into_iter()
+                    .collect())
+            }
+        }
+
+        let signal = timestamp(0, 9, 31);
+        let entry = timestamp(0, 9, 32);
+        let exit = timestamp(0, 9, 33);
+        let histories = vec![InstrumentHistory {
+            instrument: "A".to_owned(),
+            bars: vec![
+                bar(signal, 100.0, 100.0, 100.0, 100.0),
+                bar(entry, 100.0, 100.0, 100.0, 100.0),
+                bar(exit, 100.0, 100.0, 100.0, 100.0),
+            ],
+        }];
+        let mut strategy = LateUpdate {
+            order: Some(order(
+                "late",
+                "component",
+                "A",
+                ExposureSide::Long,
+                ExitPlan::OpenEnded,
+                0.0,
+                1.0,
+                1.0,
+            )),
+            exit,
+        };
+
+        let error = run_fixed_capital_history(&[day(1)], &histories, 0, &mut strategy)
+            .expect_err("same-open cost update is rejected");
+        assert!(matches!(error, FixedCapitalError::InvalidExposureUpdate(id) if id == "late"));
     }
 
     #[test]

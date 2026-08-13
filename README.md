@@ -36,6 +36,13 @@ contract account. It provides:
 - component trades, censored exposures, twelve-decimal daily returns, and
   sample-volatility Sharpe metrics.
 
+An order may be `ExitPlan::OpenEnded`. When later causal information arrives,
+`ExposureUpdate::ScheduleExit` registers its fill and additional exit or flip
+cost; `SetAllocation` replaces an allocation that depends on the observed entry
+open. Same-bar close scheduling is applied before the close, while an open exit
+must be scheduled earlier. Invalid, duplicate, inactive, or non-causal updates
+are rejected.
+
 The evaluation calendar and ordered component list are explicit configuration.
 An unregistered component is rejected, while a registered zero-trade component
 keeps its zero-valued daily column. This makes canonical CSV comparison stable.
