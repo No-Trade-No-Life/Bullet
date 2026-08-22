@@ -3,16 +3,48 @@ use std::time::Duration;
 use chrono::{DateTime, SecondsFormat, Utc};
 use reqwest::Client;
 use serde::Serialize;
-use tokio::sync::mpsc;
+use tokio::{sync::mpsc, time::sleep};
 
 use crate::{config::LinkitConfig, market_time::shanghai, model::LiveTradeSignal};
 
 const DELIVERY_TIMEOUT: Duration = Duration::from_secs(3);
+const LINKIT_ORIGIN: &str = "https://linkit.ntnl.io";
 
 #[derive(Serialize)]
 struct GroupMessage<'a> {
     conversation_id: &'a str,
+    client_message_id: &'a str,
     body: String,
+}
+
+#[derive(serde::Deserialize)]
+struct BotConversation {
+    kind: String,
+}
+
+pub async fn validate_group(
+    client: &Client,
+    config: &LinkitConfig,
+    bearer_token: &str,
+) -> Result<(), String> {
+    let response = client
+        .get(format!(
+            "{LINKIT_ORIGIN}/bot/v1/conversations/{}",
+            config.conversation_id
+        ))
+        .bearer_auth(bearer_token)
+        .timeout(DELIVERY_TIMEOUT)
+        .send()
+        .await
+        .map_err(|error| format!("group validation request failed: {error}"))?
+        .error_for_status()
+        .map_err(|error| format!("Linkit rejected target group: {error}"))?
+        .json::<BotConversation>()
+        .await
+        .map_err(|error| format!("invalid Linkit group response: {error}"))?;
+    (response.kind == "group")
+        .then_some(())
+        .ok_or_else(|| "Linkit target conversation is not a group".to_owned())
 }
 
 pub async fn send_loop(
@@ -22,11 +54,17 @@ pub async fn send_loop(
     mut receiver: mpsc::Receiver<LiveTradeSignal>,
 ) {
     while let Some(signal) = receiver.recv().await {
-        if let Err(error) = send_signal(&client, &config, &bearer_token, &signal).await {
-            eprintln!(
-                "bullet-live: Linkit notification {} {} failed: {error}",
-                signal.action, signal.candidate_id
-            );
+        loop {
+            match send_signal(&client, &config, &bearer_token, &signal).await {
+                Ok(()) => break,
+                Err(error) => {
+                    eprintln!(
+                        "bullet-live: Linkit delivery pending for signal {}: {error}",
+                        signal.candidate_id
+                    );
+                    sleep(Duration::from_secs(5)).await;
+                }
+            }
         }
     }
 }
@@ -37,12 +75,23 @@ async fn send_signal(
     bearer_token: &str,
     signal: &LiveTradeSignal,
 ) -> Result<(), String> {
-    let url = format!("{}/bot/v1/messages", config.base_url.trim_end_matches('/'));
+    send_signal_to(client, LINKIT_ORIGIN, config, bearer_token, signal).await
+}
+
+async fn send_signal_to(
+    client: &Client,
+    origin: &str,
+    config: &LinkitConfig,
+    bearer_token: &str,
+    signal: &LiveTradeSignal,
+) -> Result<(), String> {
+    let url = format!("{}/bot/v1/messages", origin.trim_end_matches('/'));
     client
         .post(url)
         .bearer_auth(bearer_token)
         .json(&GroupMessage {
             conversation_id: &config.conversation_id,
+            client_message_id: &signal.candidate_id,
             body: format_signal(signal)?,
         })
         .timeout(DELIVERY_TIMEOUT)
@@ -60,13 +109,14 @@ fn format_signal(signal: &LiveTradeSignal) -> Result<String, String> {
         .with_timezone(&shanghai())
         .to_rfc3339_opts(SecondsFormat::Secs, false);
     Ok(format!(
-        "Bullet lab0334 {action}: {side} {contracts} {instrument} @ {price:.2} ({symbol}, {at})",
+        "Bullet live simulated target · lab0334\nSignal: {action} {side} {contracts} {instrument} @ {price:.2}\nSource: current CTPD live feed · execution: simulated target only, no broker order\nStrategy: lab0334 · symbol: {symbol} · time: {at}\nSignal ID: {candidate_id}",
         action = signal.action,
         side = signal.side,
         contracts = signal.contracts,
         instrument = signal.target_instrument_id,
         price = signal.price,
         symbol = signal.symbol,
+        candidate_id = signal.candidate_id,
     ))
 }
 
@@ -82,7 +132,7 @@ mod tests {
     };
     use serde_json::Value;
 
-    use super::{LinkitConfig, format_signal, send_signal};
+    use super::{LinkitConfig, format_signal, send_signal_to};
     use crate::model::LiveTradeSignal;
 
     type CapturedRequest = Arc<Mutex<Option<(String, Value)>>>;
@@ -104,7 +154,7 @@ mod tests {
     fn renders_a_shanghai_timestamp() {
         assert_eq!(
             format_signal(&signal()).unwrap(),
-            "Bullet lab0334 OPEN: LONG 3 IM2609 @ 7123.50 (IM8888, 2026-08-14T05:00:00+08:00)"
+            "Bullet live simulated target · lab0334\nSignal: OPEN LONG 3 IM2609 @ 7123.50\nSource: current CTPD live feed · execution: simulated target only, no broker order\nStrategy: lab0334 · symbol: IM8888 · time: 2026-08-14T05:00:00+08:00\nSignal ID: IM8888-1786654800000000000-1"
         );
     }
 
@@ -118,13 +168,13 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(axum::serve(listener, app).into_future());
         let config = LinkitConfig {
-            base_url: format!("http://{address}"),
             bearer_token_file: "/unused".into(),
             conversation_id: "5077b76d-962f-45dd-83dd-05e78b5cabd7".into(),
         };
 
-        send_signal(
+        send_signal_to(
             &reqwest::Client::new(),
+            &format!("http://{address}"),
             &config,
             "linkit-test-token",
             &signal(),
@@ -140,9 +190,10 @@ mod tests {
             "5077b76d-962f-45dd-83dd-05e78b5cabd7"
         );
         assert!(payload.get("recipient_username").is_none());
+        assert_eq!(payload["client_message_id"], "IM8888-1786654800000000000-1");
         assert_eq!(
             payload["body"],
-            "Bullet lab0334 OPEN: LONG 3 IM2609 @ 7123.50 (IM8888, 2026-08-14T05:00:00+08:00)"
+            "Bullet live simulated target · lab0334\nSignal: OPEN LONG 3 IM2609 @ 7123.50\nSource: current CTPD live feed · execution: simulated target only, no broker order\nStrategy: lab0334 · symbol: IM8888 · time: 2026-08-14T05:00:00+08:00\nSignal ID: IM8888-1786654800000000000-1"
         );
     }
 
@@ -156,16 +207,21 @@ mod tests {
         let address = listener.local_addr().unwrap();
         let server = tokio::spawn(axum::serve(listener, app).into_future());
         let config = LinkitConfig {
-            base_url: format!("http://{address}"),
             bearer_token_file: "/unused".into(),
             conversation_id: "5077b76d-962f-45dd-83dd-05e78b5cabd7".into(),
         };
         let signal = signal();
 
         assert!(
-            send_signal(&reqwest::Client::new(), &config, "test", &signal)
-                .await
-                .is_err()
+            send_signal_to(
+                &reqwest::Client::new(),
+                &format!("http://{address}"),
+                &config,
+                "test",
+                &signal
+            )
+            .await
+            .is_err()
         );
         assert_eq!(signal, super::tests::signal());
         server.abort();

@@ -22,7 +22,6 @@ bearer_token_file = "/etc/bullet/remote-account.token"
 # Optional real-time trading notifications. The Bot token file belongs to the
 # `bullet` service account, mode 0600, and never belongs in this repository.
 [linkit]
-base_url = "https://linkit.ntnl.io"
 bearer_token_file = "/etc/bullet/linkit.token"
 conversation_id = "5077b76d-962f-45dd-83dd-05e78b5cabd7"
 

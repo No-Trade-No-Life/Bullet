@@ -42,8 +42,6 @@ pub struct RemoteAccountConfig {
 
 #[derive(Clone, Debug, Deserialize)]
 pub struct LinkitConfig {
-    /// Linkit Bot API origin. The token remains in a separate one-line file.
-    pub base_url: String,
     pub bearer_token_file: PathBuf,
     /// Existing Linkit group conversation for live trade notifications.
     pub conversation_id: String,
@@ -138,9 +136,9 @@ impl LiveConfig {
             return Err("ctpd base_url and stale_after_ms must be configured".into());
         }
         if let Some(linkit) = &self.linkit
-            && (linkit.base_url.trim().is_empty() || linkit.conversation_id.trim().is_empty())
+            && linkit.conversation_id.trim().is_empty()
         {
-            return Err("linkit base_url and conversation_id must be configured".into());
+            return Err("linkit conversation_id must be configured".into());
         }
         if self.instruments.len() != LAB0334_SYMBOLS.len() {
             return Err("lab0334 requires exactly IC8888, IF8888, IH8888 and IM8888".into());
