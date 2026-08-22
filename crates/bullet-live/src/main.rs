@@ -108,7 +108,7 @@ async fn serve(path: &str) -> Result<(), Box<dyn Error>> {
         &portfolio,
     )
     .await?;
-    let signal_tx = start_linkit_sender(&client, &config, secrets.linkit_bearer_token);
+    let signal_tx = start_linkit_sender(&client, &config, secrets.linkit_bearer_token).await?;
     let recovery_gate = Arc::new(Mutex::new(()));
     for instrument in instruments.iter().cloned() {
         tokio::spawn(ctpd::consume_ticks(
@@ -138,13 +138,16 @@ async fn serve(path: &str) -> Result<(), Box<dyn Error>> {
     Ok(())
 }
 
-fn start_linkit_sender(
+async fn start_linkit_sender(
     client: &reqwest::Client,
     config: &LiveConfig,
     bearer_token: Option<String>,
-) -> Option<mpsc::Sender<LiveTradeSignal>> {
-    let linkit = config.linkit.clone()?;
+) -> Result<Option<mpsc::Sender<LiveTradeSignal>>, Box<dyn Error>> {
+    let Some(linkit) = config.linkit.clone() else {
+        return Ok(None);
+    };
     let bearer_token = bearer_token.expect("Linkit config loads its token file");
+    linkit::validate_group(client, &linkit, &bearer_token).await?;
     let (sender, receiver) = mpsc::channel(LINKIT_SIGNAL_QUEUE_CAPACITY);
     tokio::spawn(linkit::send_loop(
         client.clone(),
@@ -152,7 +155,7 @@ fn start_linkit_sender(
         bearer_token,
         receiver,
     ));
-    Some(sender)
+    Ok(Some(sender))
 }
 
 fn seed_portfolio(config: &LiveConfig, capture_ledger: bool) -> Result<Portfolio, String> {
