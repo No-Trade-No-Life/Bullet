@@ -147,7 +147,7 @@ cargo build --release -p bullet-live
 
 The adapter fails closed: it clears published targets when CTPD is disconnected, stale, or out of order, and only republishes them after all configured instruments are recovered from closed Klines. It refuses a live start with stale Parquet input. Linkit notifications, when configured for a group conversation, are asynchronous and do not alter inference or target state.
 
-Before changing live inference, compare the Rust implementation with an E-Works reference generated from the same Parquet history:
+Before changing live inference, compare the Rust implementation with an E-Works reference generated from the same Parquet history. Production acceptance additionally requires the immutable provenance gate in [`docs/lab0334-production-acceptance.md`](docs/lab0334-production-acceptance.md); `parity=pass` without the declared source, artifact, input, and reference hashes is not a production migration acceptance.
 
 ```bash
 python3 scripts/export-lab0334-parity-reference.py \

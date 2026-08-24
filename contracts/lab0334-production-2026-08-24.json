@@ -1,0 +1,62 @@
+{
+  "schema_version": 1,
+  "accepted_at_utc": "2026-08-24",
+  "python_reference": {
+    "release_uri": "s3://bullet-live-artifacts-524909477426-ap-southeast-1/releases/20260813-market-timezone/eworks-lab0334-final-full-parity.tar.gz",
+    "archive_sha256": "1ee3fd2784080b291a120fed277f9be67d3339916e8afd2f6cd2b13ac09d5308",
+    "archive_member": "labs/lab-0334/run_optimized.py",
+    "sha256": "bb1451b69fe6ddb0c6e50510dda6f8d13612dc8b336428c2f208de16e994c6f5",
+    "environment": {
+      "python": "3.12.7",
+      "pandas": "2.2.2",
+      "numpy": "1.26.4",
+      "xgboost": "3.2.0",
+      "pyarrow": "16.1.0"
+    }
+  },
+  "inputs": {
+    "date_type": "timestamp[ns, tz=Asia/Shanghai]",
+    "parquet": [
+      {
+        "symbol": "IC8888",
+        "filename": "IC8888.parquet",
+        "rows": 666030,
+        "sha256": "7f5c0c8a03a5fdb920bf95a5f950555bc419dd292123d69d6c9f7760e326c87b"
+      },
+      {
+        "symbol": "IF8888",
+        "filename": "IF8888.parquet",
+        "rows": 993000,
+        "sha256": "d29fcfbab1f58ee8023b780bba805e3aa946c53db320aab6b40c13485fd19608"
+      },
+      {
+        "symbol": "IH8888",
+        "filename": "IH8888.parquet",
+        "rows": 666030,
+        "sha256": "3216196f865267d7ae9b3385172c149a042465d2bf724b59f484e3e83c53b23a"
+      },
+      {
+        "symbol": "IM8888",
+        "filename": "IM8888.parquet",
+        "rows": 235680,
+        "sha256": "467497c530fde045ec60159284787ba145e1a049a58dfb34da5c22c664fbf64c"
+      }
+    ]
+  },
+  "bullet": {
+    "source_commit": "40512180824e22ec49109abf9ed0bf56eb83f187",
+    "release_uri": "s3://bullet-live-artifacts-524909477426-ap-southeast-1/releases/40512180824e22ec49109abf9ed0bf56eb83f187/bullet-live-x86_64-unknown-linux-musl.tgz",
+    "release_archive_sha256": "59a1c2eb81bb7e5cea8308c4bad7b45119001fd566253b8d2686346cf3b9640f",
+    "release_member": "bullet-live-x86_64-unknown-linux-musl",
+    "binary_sha256": "712abfdf30cba791ca85a7c9e19d034f7f9ab2f1a3e93b9bc8596126eddb310a"
+  },
+  "reference_outputs": {
+    "candidate_decisions_sha256": "cbdaf70b5e734d357495c1196879650ea1089c69c53d2dc8edeaae3bd8887a31",
+    "raw_candidate_labels_sha256": "c6e78482ca848f0fc71724cd34bdf42cd4084d01d1681fcff7fa33afe95dd6ad"
+  },
+  "parity": {
+    "decisions": 5395,
+    "labels": 5395,
+    "canonical_bytes": 5839749
+  }
+}
