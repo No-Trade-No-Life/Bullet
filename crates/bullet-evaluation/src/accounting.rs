@@ -1,18 +1,18 @@
 use crate::*;
 
 #[derive(Clone)]
-struct DayAccumulator {
-    gross_factor: f64,
-    net_factor: f64,
-    cost: i64,
-    turnover: u64,
+pub(crate) struct DayAccumulator {
+    pub(crate) gross_factor: f64,
+    pub(crate) net_factor: f64,
+    pub(crate) cost: i64,
+    pub(crate) turnover: u64,
 }
 
-fn add(left: i64, right: i64) -> Result<i64> {
+pub(crate) fn add(left: i64, right: i64) -> Result<i64> {
     left.checked_add(right)
         .ok_or_else(|| EvaluationError("canonical sum overflows".into()))
 }
-fn add_turnover(left: u64, right: u64) -> Result<u64> {
+pub(crate) fn add_turnover(left: u64, right: u64) -> Result<u64> {
     left.checked_add(right)
         .ok_or_else(|| EvaluationError("turnover overflows".into()))
 }
@@ -119,21 +119,8 @@ pub(super) fn replay(input: &EvaluationInput) -> Result<EvaluationResult> {
             units = 0;
         }
     }
-    let daily_returns = config
-        .evaluation_days
-        .iter()
-        .zip(&days)
-        .map(|(day, value)| {
-            Ok(DailyReturnRow {
-                day_timestamp_ns: *day,
-                gross_return_units: to_fixed(value.gross_factor - 1.0)?,
-                net_return_units: to_fixed(value.net_factor - 1.0)?,
-                cost_sum_units: value.cost,
-                turnover_units: value.turnover,
-            })
-        })
-        .collect::<Result<Vec<_>>>()?;
-    let mut metrics = metrics(&days, config)?;
+    let daily_returns = build_daily_returns(&days, config)?;
+    let mut metrics = build_metrics(&days, config)?;
     metrics.turnover_units = total_turnover;
     metrics.total_cost_units = total_cost;
     metrics.completed_directional_trades = completed_trades;
@@ -186,7 +173,7 @@ pub(super) fn replay(input: &EvaluationInput) -> Result<EvaluationResult> {
     })
 }
 
-fn execution(
+pub(crate) fn execution(
     point: &MarketPoint,
     from_units: i64,
     realized_units: i64,
@@ -213,7 +200,30 @@ fn execution(
     })
 }
 
-fn metrics(days: &[DayAccumulator], config: &EvaluationConfig) -> Result<EvaluationMetrics> {
+pub(crate) fn build_daily_returns(
+    days: &[DayAccumulator],
+    config: &EvaluationConfig,
+) -> Result<Vec<DailyReturnRow>> {
+    config
+        .evaluation_days
+        .iter()
+        .zip(days)
+        .map(|(day, value)| {
+            Ok(DailyReturnRow {
+                day_timestamp_ns: *day,
+                gross_return_units: to_fixed(value.gross_factor - 1.0)?,
+                net_return_units: to_fixed(value.net_factor - 1.0)?,
+                cost_sum_units: value.cost,
+                turnover_units: value.turnover,
+            })
+        })
+        .collect()
+}
+
+pub(crate) fn build_metrics(
+    days: &[DayAccumulator],
+    config: &EvaluationConfig,
+) -> Result<EvaluationMetrics> {
     let returns: Vec<_> = days.iter().map(|value| value.net_factor - 1.0).collect();
     let count = returns.len();
     let mean = returns.iter().sum::<f64>() / count as f64;
