@@ -6,6 +6,7 @@ use std::path::Path;
 pub use bullet_backtest::fixed_capital;
 pub use bullet_backtest::{BarContext, Config, Order, Strategy};
 pub use bullet_core::Bar;
+pub use bullet_evaluation as evaluation;
 
 pub fn run(path: impl AsRef<Path>, strategy: &mut impl Strategy) -> Result<(), Box<dyn Error>> {
     let config = Config::read(path)?;

@@ -6,6 +6,7 @@ license.workspace = true
 repository.workspace = true
 
 [dependencies]
+bullet-evaluation = { path = "../bullet-evaluation" }
 bullet-backtest = { path = "../bullet-backtest" }
 bullet-core = { path = "../bullet-core" }
 libc = "0.2.189"

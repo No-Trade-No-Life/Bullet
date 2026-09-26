@@ -4,6 +4,7 @@ members = [
   "crates/bullet-engine",
   "crates/bullet-data",
   "crates/bullet-backtest",
+  "crates/bullet-evaluation",
   "crates/bullet-cli",
   "crates/bullet",
   "crates/bullet-live",

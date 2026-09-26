@@ -21,6 +21,30 @@ real-time data ────> ordered event stream ──> live model ─> target
 
 Historical replay produces reproducible research results. A live adapter is responsible for receiving real-time market events and converting the resulting target state into its declared downstream interface. It must not change event ordering or use information unavailable at the decision time.
 
+## Neutral target-path evaluation
+
+`bullet-evaluation` is the strategy-neutral evaluation surface for external
+model and strategy adapters. It consumes a causal `EvaluationInput` containing
+normalized exposure targets and an explicitly ordered market-point stream, then
+emits decision, execution, position, daily-return, metrics, and audit ledgers.
+Strategy state, model artifacts, features, labels, and diagnostics remain
+outside the evaluator. See
+[`docs/neutral-strategy-evaluation.md`](docs/neutral-strategy-evaluation.md)
+for the schema and invariants.
+
+The evaluator is separate from both the legacy contract-accounting backtest
+and the fixed-capital component replay; those surfaces have different return
+denominators and cost semantics. In its v1 normalized-exposure surface,
+`target_units` are return-exposure multiples rather than asset quantities.
+Adapters provide one ordered valuation price per event and an explicit terminal
+policy.
+
+For a JSON fixture, the thin boundary binary is:
+
+```bash
+cargo run --release -p bullet-evaluation --bin bullet-evaluate --   input.json result.json
+```
+
 ## Fixed-capital research replay
 
 `bullet_backtest::fixed_capital` is the component-level research surface for
