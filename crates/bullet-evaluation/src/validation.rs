@@ -1,11 +1,6 @@
 use crate::*;
 
-pub(super) fn validate(input: &EvaluationInput) -> Result<()> {
-    require(
-        input.schema_version == SCHEMA_VERSION,
-        "unsupported schema version",
-    )?;
-    let config = &input.config;
+pub(crate) fn validate_config(config: &EvaluationConfig) -> Result<()> {
     require(
         !config.instrument.trim().is_empty(),
         "instrument must not be empty",
@@ -45,6 +40,16 @@ pub(super) fn validate(input: &EvaluationInput) -> Result<()> {
             )?;
         }
     }
+    Ok(())
+}
+
+pub(super) fn validate(input: &EvaluationInput) -> Result<()> {
+    require(
+        input.schema_version == SCHEMA_VERSION,
+        "unsupported schema version",
+    )?;
+    validate_config(&input.config)?;
+    let config = &input.config;
     require(
         input.market.len() >= 2,
         "at least two market points are required",

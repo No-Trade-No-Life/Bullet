@@ -5,6 +5,7 @@
 
 mod accounting;
 mod audit;
+mod streaming;
 mod validation;
 
 use std::error::Error;
@@ -212,6 +213,11 @@ pub fn evaluate(input: &EvaluationInput) -> Result<EvaluationResult> {
     validation::validate(input)?;
     accounting::replay(input)
 }
+
+pub use streaming::{
+    JsonlReplayOptions, StreamOutputManifest, StreamRunSummary, StreamStatus, evaluate_jsonl,
+    hash_decision_jsonl, hash_market_jsonl,
+};
 
 /// Decimal half-even formatting of binary64 to twelve places, without -0.
 /// Canonical integers are presentation/audit values, not feedback into accounting.

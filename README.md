@@ -39,10 +39,19 @@ denominators and cost semantics. In its v1 normalized-exposure surface,
 Adapters provide one ordered valuation price per event and an explicit terminal
 policy.
 
-For a JSON fixture, the thin boundary binary is:
+For a bounded JSON fixture, the thin boundary binary is:
 
 ```bash
-cargo run --release -p bullet-evaluation --bin bullet-evaluate --   input.json result.json
+cargo run --release -p bullet-evaluation --bin bullet-evaluate -- \
+  input.json result.json
+```
+
+For large canonical streams, use the checkpointed JSONL boundary:
+
+```bash
+cargo run --release -p bullet-evaluation --bin bullet-evaluate-stream -- \
+  config.json market.jsonl decisions.jsonl output-dir \
+  --checkpoint-every 100000
 ```
 
 ## Fixed-capital research replay

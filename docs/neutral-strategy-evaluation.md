@@ -126,6 +126,28 @@ The intended replication workflow is:
 6. only then expand to full replay, prefix replay, future-suffix mutation, and
    checkpoint/restart tests.
 
-The `bullet-evaluate` binary is a thin JSON boundary around this API. A future
-streaming or checkpointed runner may change storage, but it must preserve the
-same canonical event ordering and ledger semantics.
+The `bullet-evaluate` binary is the bounded in-memory JSON boundary. For the
+full-scale path, `bullet-evaluate-stream` consumes one config JSON and two
+newline-delimited JSON streams:
+
+```bash
+cargo run --release -p bullet-evaluation --bin bullet-evaluate-stream -- \
+  config.json market.jsonl decisions.jsonl output-dir \
+  --checkpoint-every 100000
+```
+
+The streaming runner writes decision, execution, position, and daily ledgers as
+JSONL files. It persists a binary-safe JSON checkpoint containing the last
+market point, target state, day accumulators, input hashes, and output-prefix
+hashes. A restart validates those values before appending:
+
+```bash
+cargo run --release -p bullet-evaluation --bin bullet-evaluate-stream -- \
+  config.json market.jsonl decisions.jsonl output-dir \
+  --resume
+```
+
+`--stop-after N` is a test-only bounded stop that leaves a restartable
+checkpoint. A resumed run must produce byte-identical ledger files and the same
+run audit hash as an uninterrupted run. The streaming runner does not change
+strategy semantics; it only changes storage and restart boundaries.
