@@ -39,8 +39,8 @@ impl FeatureSchema {
     }
 
     pub fn validate(&self) -> Result<(), FeatureError> {
-        let expected = feature_schema_hash(&self.names)?;
-        if expected != self.sha256 {
+        let expected = Self::new(self.names.clone())?;
+        if expected.sha256 != self.sha256 {
             return Err(FeatureError(
                 "feature schema hash does not match feature names".into(),
             ));
@@ -65,18 +65,24 @@ pub struct FeatureVector {
 
 impl FeatureVector {
     pub fn new(schema: FeatureSchema, values: Vec<f64>) -> Result<Self, FeatureError> {
-        schema.validate()?;
-        if schema.names.len() != values.len() {
+        let vector = Self { schema, values };
+        vector.validate()?;
+        Ok(vector)
+    }
+
+    pub fn validate(&self) -> Result<(), FeatureError> {
+        self.schema.validate()?;
+        if self.schema.names.len() != self.values.len() {
             return Err(FeatureError(format!(
                 "feature dimension mismatch: schema={} values={}",
-                schema.names.len(),
-                values.len()
+                self.schema.names.len(),
+                self.values.len()
             )));
         }
-        if values.iter().any(|value| !value.is_finite()) {
+        if self.values.iter().any(|value| !value.is_finite()) {
             return Err(FeatureError("feature values must be finite".into()));
         }
-        Ok(Self { schema, values })
+        Ok(())
     }
 }
 
@@ -417,21 +423,27 @@ impl LinearModel {
         weights: Vec<f64>,
         bias: f64,
     ) -> Result<Self, ModelError> {
-        feature_schema
-            .validate()
-            .map_err(|error| ModelError(error.to_string()))?;
-        if feature_schema.names.len() != weights.len() {
-            return Err(ModelError("linear model weight dimension mismatch".into()));
-        }
-        if weights.iter().any(|weight| !weight.is_finite()) || !bias.is_finite() {
-            return Err(ModelError("linear model parameters must be finite".into()));
-        }
-        Ok(Self {
+        let model = Self {
             metadata,
             feature_schema,
             weights,
             bias,
-        })
+        };
+        model.validate()?;
+        Ok(model)
+    }
+
+    pub fn validate(&self) -> Result<(), ModelError> {
+        self.feature_schema
+            .validate()
+            .map_err(|error| ModelError(error.to_string()))?;
+        if self.feature_schema.names.len() != self.weights.len() {
+            return Err(ModelError("linear model weight dimension mismatch".into()));
+        }
+        if self.weights.iter().any(|weight| !weight.is_finite()) || !self.bias.is_finite() {
+            return Err(ModelError("linear model parameters must be finite".into()));
+        }
+        Ok(())
     }
 }
 
@@ -447,13 +459,11 @@ impl Model for LinearModel {
     }
 
     fn predict(&mut self, features: &FeatureVector) -> Result<Prediction, Self::Error> {
-        self.feature_schema
+        self.validate()?;
+        features
             .validate()
             .map_err(|error| ModelError(error.to_string()))?;
-        if self.weights.len() != self.feature_schema.names.len() {
-            return Err(ModelError("linear model weight dimension mismatch".into()));
-        }
-        if features.schema.sha256 != self.feature_schema.sha256 {
+        if features.schema != self.feature_schema {
             return Err(ModelError(
                 "linear model received an unknown feature schema".into(),
             ));

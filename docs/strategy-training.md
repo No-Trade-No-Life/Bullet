@@ -21,7 +21,9 @@ The dataset also requires:
 - no empty datasets.
 
 The training layer never shuffles rows. `ChronologicalSplit` and
-`WalkForwardPlan` make train/validation windows explicit and expanding.
+`WalkForwardPlan` make train/validation windows explicit and expanding. A split
+is rejected when the final training label extends past the first validation
+feature timestamp; this is the purging boundary for overlapping forward labels.
 
 ## Training and inference
 
