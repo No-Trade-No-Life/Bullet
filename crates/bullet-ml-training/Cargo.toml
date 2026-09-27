@@ -1,0 +1,19 @@
+[package]
+name = "bullet-ml-training"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+description = "Causal chronological ML dataset and pure-Rust training layer for Bullet"
+
+[features]
+default = ["smartcore-backend"]
+smartcore-backend = ["dep:smartcore"]
+
+[dependencies]
+bullet-ml = { path = "../bullet-ml" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["float_roundtrip"] }
+sha2 = "0.10.9"
+smartcore = { version = "0.6.14", optional = true }
