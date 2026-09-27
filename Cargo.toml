@@ -5,6 +5,7 @@ members = [
   "crates/bullet-data",
   "crates/bullet-backtest",
   "crates/bullet-evaluation",
+  "crates/bullet-strategy",
   "crates/bullet-cli",
   "crates/bullet",
   "crates/bullet-live",

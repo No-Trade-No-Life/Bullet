@@ -54,6 +54,16 @@ cargo run --release -p bullet-evaluation --bin bullet-evaluate-stream -- \
   --checkpoint-every 100000
 ```
 
+## Pure-Rust strategy runtime
+
+`bullet-strategy` is the high-level pure-Rust strategy surface for normalized-exposure evaluation. It absorbs causal history windows, next-execution timing, target-intent metadata, provenance hashes, evaluation-calendar derivation, and the handoff to `bullet-evaluation`. A strategy implements one `Strategy::decide` callback; it does not manually construct JSON, timestamps, or provenance records. See [`docs/strategy-runtime.md`](docs/strategy-runtime.md).
+
+The callback receives only completed observations and a history slice ending at that observation. The next execution timestamp is visible, but its market price is not. Asset-specific models, features, overlays, and state machines remain explicit in the Rust strategy implementation. No Python SDK is required.
+
+```bash
+cargo run -p bullet-strategy --example momentum
+```
+
 ## Fixed-capital research replay
 
 `bullet_backtest::fixed_capital` is the component-level research surface for
@@ -222,6 +232,7 @@ bullet                 stable public strategy API and reporting
 
 bullet-cli             compiles and runs a backtest strategy source file
 bullet-live            current live-inference and target-state adapter
+bullet-strategy        pure-Rust causal strategy runtime for target evaluation
 ```
 
 ## Development
