@@ -16,4 +16,8 @@ bullet-ml = { path = "../bullet-ml" }
 serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["float_roundtrip"] }
 sha2 = "0.10.9"
-smartcore = { version = "0.6.14", optional = true }
+smartcore = { version = "=0.6.15", optional = true }
+
+[[example]]
+name = "train_linear"
+required-features = ["smartcore-backend"]

@@ -113,6 +113,25 @@ impl TrainingDataset {
         Ok(format!("{:x}", digest.finalize()))
     }
 
+    pub fn validate_split(&self, split: ChronologicalSplit) -> Result<(), TrainingError> {
+        if split.validation_end_exclusive > self.examples.len()
+            || split.train_end_exclusive == 0
+            || split.train_end_exclusive >= split.validation_end_exclusive
+        {
+            return Err(TrainingError(
+                "chronological split is invalid for dataset".into(),
+            ));
+        }
+        let last_train = &self.examples[split.train_end_exclusive - 1];
+        let first_validation = &self.examples[split.train_end_exclusive];
+        if last_train.label_end_ns > first_validation.decision_time_ns {
+            return Err(TrainingError(
+                "training label crosses the validation feature boundary".into(),
+            ));
+        }
+        Ok(())
+    }
+
     pub fn range(&self, range: Range<usize>) -> Result<TrainingView<'_>, TrainingError> {
         if range.start >= range.end || range.end > self.examples.len() {
             return Err(TrainingError("training range is invalid".into()));
@@ -357,11 +376,7 @@ mod smartcore_backend {
         split: ChronologicalSplit,
         config: &LinearTrainingConfig,
     ) -> Result<TrainedLinearModel, TrainingError> {
-        if split.validation_end_exclusive > dataset.len() {
-            return Err(TrainingError(
-                "chronological split exceeds dataset length".into(),
-            ));
-        }
+        dataset.validate_split(split)?;
         let train = dataset.range(split.train_range())?;
         let validation = dataset.range(split.validation_range())?;
         let train_rows: Vec<Vec<f64>> = train
@@ -495,6 +510,25 @@ mod tests {
         let split = ChronologicalSplit::new(8, 5, 3).expect("split");
         assert_eq!(split.train_range(), 0..5);
         assert_eq!(split.validation_range(), 5..8);
+    }
+
+    #[test]
+    fn rejects_a_training_label_that_crosses_the_validation_boundary() {
+        let schema = FeatureSchema::new(vec!["x".into()]).expect("schema");
+        let examples = (0..4)
+            .map(|index| {
+                let features =
+                    FeatureVector::new(schema.clone(), vec![index as f64]).expect("features");
+                let label_end = if index == 1 { 3 } else { index + 1 };
+                TrainingExample::new(index, index, label_end, features, index as f64)
+                    .expect("example")
+            })
+            .collect();
+        let dataset = TrainingDataset::new(schema, examples).expect("dataset");
+        let error = dataset
+            .validate_split(ChronologicalSplit::new(4, 2, 2).expect("split"))
+            .expect_err("label boundary leak");
+        assert!(error.to_string().contains("crosses the validation"));
     }
 
     #[cfg(feature = "smartcore-backend")]
