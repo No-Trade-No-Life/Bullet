@@ -64,6 +64,16 @@ The callback receives only completed observations and a history slice ending at 
 cargo run -p bullet-strategy --example momentum
 ```
 
+## Pure-Rust ML strategies
+
+`bullet-ml` adds causal feature pipelines, feature-schema validation, pure-Rust model inference, prediction diagnostics, warmup policy, and prediction-to-target mapping above `bullet-strategy`. It includes a rolling-price feature pipeline, deterministic `LinearModel`, and `ScoreToExposure` mapper. No Python runtime or Python SDK is required. See [`docs/strategy-ml.md`](docs/strategy-ml.md).
+
+```bash
+cargo run -p bullet-ml --example linear_momentum
+```
+
+The crate does not train models or search features. It owns the inference contract; model training/export remains an external research step.
+
 ## Fixed-capital research replay
 
 `bullet_backtest::fixed_capital` is the component-level research surface for
@@ -233,6 +243,7 @@ bullet                 stable public strategy API and reporting
 bullet-cli             compiles and runs a backtest strategy source file
 bullet-live            current live-inference and target-state adapter
 bullet-strategy        pure-Rust causal strategy runtime for target evaluation
+bullet-ml              pure-Rust causal features, models, and target mapping
 ```
 
 ## Development
