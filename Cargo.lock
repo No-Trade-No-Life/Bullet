@@ -311,6 +311,17 @@ dependencies = [
 ]
 
 [[package]]
+name = "bullet-ml"
+version = "0.1.0"
+dependencies = [
+ "bullet-evaluation",
+ "bullet-strategy",
+ "serde",
+ "serde_json",
+ "sha2",
+]
+
+[[package]]
 name = "bullet-strategy"
 version = "0.1.0"
 dependencies = [

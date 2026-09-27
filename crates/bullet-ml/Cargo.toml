@@ -1,0 +1,17 @@
+[package]
+name = "bullet-ml"
+version = "0.1.0"
+edition.workspace = true
+license.workspace = true
+repository.workspace = true
+
+description = "Pure-Rust causal feature, model, and target mapping support for Bullet strategies"
+
+[dependencies]
+bullet-strategy = { path = "../bullet-strategy" }
+serde = { version = "1.0.228", features = ["derive"] }
+serde_json = { version = "1.0.145", features = ["float_roundtrip"] }
+sha2 = "0.10.9"
+
+[dev-dependencies]
+bullet-evaluation = { path = "../bullet-evaluation" }
