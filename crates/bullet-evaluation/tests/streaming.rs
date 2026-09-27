@@ -23,6 +23,7 @@ fn config() -> EvaluationConfig {
         slippage_bps: 0.0,
         terminal_policy: TerminalPolicy::Liquidate,
         sharpe_periods_per_year: 1.0,
+        sharpe_standard_deviation_ddof: 1,
         annualization_days_per_year: 1.0,
         evaluation_days: vec![0],
     }

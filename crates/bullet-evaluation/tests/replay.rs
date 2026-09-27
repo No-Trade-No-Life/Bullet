@@ -1,6 +1,6 @@
 use bullet_evaluation::{
     Accounting, CausalAvailability, EvaluationConfig, EvaluationInput, EventTime, MarketPoint,
-    TargetDecision, TerminalPolicy, evaluate,
+    NANOS_PER_DAY, TargetDecision, TerminalPolicy, evaluate,
 };
 
 fn time(timestamp_ns: u64) -> EventTime {
@@ -18,6 +18,7 @@ fn config() -> EvaluationConfig {
         slippage_bps: 0.0,
         terminal_policy: TerminalPolicy::Liquidate,
         sharpe_periods_per_year: 1.0,
+        sharpe_standard_deviation_ddof: 1,
         annualization_days_per_year: 1.0,
         evaluation_days: vec![0],
     }
@@ -138,4 +139,44 @@ fn fixed_format_matches_the_existing_twelve_decimal_contract() {
     assert_eq!(bullet_evaluation::to_fixed(2.5e-12).unwrap(), 2);
     assert_eq!(bullet_evaluation::to_fixed(-0.5e-12).unwrap(), 0);
     assert_eq!(bullet_evaluation::to_fixed(-1.5e-12).unwrap(), -2);
+}
+
+#[test]
+fn omitted_ddof_defaults_to_sample_and_default_is_not_serialized() {
+    let value = serde_json::to_value(config()).expect("serialize config");
+    assert!(
+        !value
+            .as_object()
+            .expect("config object")
+            .contains_key("sharpe_standard_deviation_ddof")
+    );
+    let parsed: EvaluationConfig = serde_json::from_value(value).expect("parse config");
+    assert_eq!(parsed.sharpe_standard_deviation_ddof, 1);
+}
+
+#[test]
+fn population_ddof_uses_the_population_denominator() {
+    let mut sample_input = input();
+    sample_input.config.evaluation_days = vec![0, NANOS_PER_DAY];
+    let sample = evaluate(&sample_input).expect("sample-ddof input");
+    sample_input.config.sharpe_standard_deviation_ddof = 0;
+    let population = evaluate(&sample_input).expect("population-ddof input");
+
+    assert_ne!(
+        sample.metrics.daily_volatility_units,
+        population.metrics.daily_volatility_units
+    );
+    assert_ne!(sample.metrics.sharpe_units, population.metrics.sharpe_units);
+}
+
+#[test]
+fn rejects_unsupported_sharpe_ddof() {
+    let mut value = input();
+    value.config.sharpe_standard_deviation_ddof = 2;
+    let error = evaluate(&value).expect_err("unsupported ddof must be rejected");
+
+    assert_eq!(
+        error.to_string(),
+        "Sharpe standard deviation ddof must be 0 or 1"
+    );
 }

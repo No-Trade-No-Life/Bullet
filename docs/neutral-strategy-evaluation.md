@@ -42,6 +42,18 @@ contracts, notional currency, or margin. This is the accounting surface needed
 by the BTC frozen target path and is intentionally distinct from Bullet's
 contract-accounting and fixed-capital surfaces.
 
+### Sharpe volatility convention
+
+`sharpe_standard_deviation_ddof` is an explicit statistical contract:
+
+- `0` uses the population standard deviation;
+- `1` uses the sample standard deviation.
+
+The field defaults to `1` when omitted and is omitted when serializing that
+default, preserving existing input and audit hashes. Adapters must set it
+explicitly when their frozen oracle uses a different convention; for example,
+ETH-ML-0119 and SOL-ML-0095 use `0`.
+
 The adapter supplies one ordered `MarketPoint` per valuation timestamp. A v1
 market stream has strictly increasing timestamps and one point per timestamp;
 `EventTime.sequence` is retained in the schema for causal provenance, but equal-
@@ -58,7 +70,8 @@ last open-to-open return and the liquidation cost separately auditable.
 
 - `schema_version`;
 - `EvaluationConfig` with accounting, instrument, costs, terminal policy,
-  annualization, and an explicit UTC-midnight calendar;
+  annualization, Sharpe volatility convention, and an explicit UTC-midnight
+  calendar;
 - sorted `MarketPoint` records containing `EventTime`, instrument, and price;
 - sorted `TargetDecision` records.
 

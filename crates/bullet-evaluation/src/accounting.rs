@@ -227,8 +227,14 @@ pub(crate) fn build_metrics(
     let returns: Vec<_> = days.iter().map(|value| value.net_factor - 1.0).collect();
     let count = returns.len();
     let mean = returns.iter().sum::<f64>() / count as f64;
-    let volatility = if count > 1 {
-        (returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / (count - 1) as f64).sqrt()
+    let variance_denominator = match config.sharpe_standard_deviation_ddof {
+        0 => count,
+        1 => count.saturating_sub(1),
+        _ => unreachable!("validated Sharpe standard deviation ddof"),
+    };
+    let volatility = if variance_denominator > 0 {
+        (returns.iter().map(|r| (r - mean).powi(2)).sum::<f64>() / variance_denominator as f64)
+            .sqrt()
     } else {
         0.0
     };
