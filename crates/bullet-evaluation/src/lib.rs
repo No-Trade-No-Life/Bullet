@@ -18,6 +18,14 @@ pub const SCHEMA_VERSION: u32 = 1;
 pub const NANOS_PER_DAY: u64 = 86_400_000_000_000;
 pub const FIXED_SCALE: f64 = 1_000_000_000_000.0;
 
+fn default_sharpe_standard_deviation_ddof() -> u8 {
+    1
+}
+
+fn is_sample_standard_deviation(ddof: &u8) -> bool {
+    *ddof == 1
+}
+
 /// `sequence` explicitly orders availability, decision and fill at one instant.
 #[derive(Clone, Copy, Debug, Deserialize, Eq, Ord, PartialEq, PartialOrd, Serialize)]
 #[serde(deny_unknown_fields)]
@@ -81,6 +89,13 @@ pub struct EvaluationConfig {
     pub slippage_bps: f64,
     pub terminal_policy: TerminalPolicy,
     pub sharpe_periods_per_year: f64,
+    /// Population (`0`) or sample (`1`) standard deviation for Sharpe.
+    /// Omitting this field preserves the historical sample-standard-deviation default.
+    #[serde(
+        default = "default_sharpe_standard_deviation_ddof",
+        skip_serializing_if = "is_sample_standard_deviation"
+    )]
+    pub sharpe_standard_deviation_ddof: u8,
     pub annualization_days_per_year: f64,
     /// Consecutive UTC midnights in epoch nanoseconds, including quiet days.
     pub evaluation_days: Vec<u64>,

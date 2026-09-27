@@ -15,6 +15,10 @@ pub(crate) fn validate_config(config: &EvaluationConfig) -> Result<()> {
         (config.one_way_cost_bps + config.slippage_bps).is_finite(),
         "cost sum overflows",
     )?;
+    require(
+        matches!(config.sharpe_standard_deviation_ddof, 0 | 1),
+        "Sharpe standard deviation ddof must be 0 or 1",
+    )?;
     for value in [
         config.sharpe_periods_per_year,
         config.annualization_days_per_year,
