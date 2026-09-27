@@ -64,6 +64,16 @@ The callback receives only completed observations and a history slice ending at 
 cargo run -p bullet-strategy --example momentum
 ```
 
+## Pure-Rust ML training
+
+`bullet-ml-training` adds chronological feature/label contracts, explicit train/validation splits, expanding walk-forward plans, and a SmartCore-backed pure-Rust linear trainer. It exports the existing serializable `bullet-ml::LinearModel` format, so training and inference stay in one Rust model contract. See [`docs/strategy-training.md`](docs/strategy-training.md).
+
+```bash
+cargo run -p bullet-ml-training --example train_linear
+```
+
+The training layer does not shuffle time-series rows and rejects feature/decision/label ordering violations.
+
 ## Pure-Rust ML strategies
 
 `bullet-ml` adds causal feature pipelines, feature-schema validation, pure-Rust model inference, prediction diagnostics, warmup policy, and prediction-to-target mapping above `bullet-strategy`. It includes a rolling-price feature pipeline, deterministic `LinearModel`, and `ScoreToExposure` mapper. No Python runtime or Python SDK is required. See [`docs/strategy-ml.md`](docs/strategy-ml.md).
@@ -244,6 +254,7 @@ bullet-cli             compiles and runs a backtest strategy source file
 bullet-live            current live-inference and target-state adapter
 bullet-strategy        pure-Rust causal strategy runtime for target evaluation
 bullet-ml              pure-Rust causal features, models, and target mapping
+bullet-ml-training     chronological pure-Rust ML datasets and training backends
 ```
 
 ## Development

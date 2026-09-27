@@ -57,7 +57,7 @@ fn feature_schema_hash(names: &[String]) -> Result<String, FeatureError> {
     Ok(format!("{:x}", digest.finalize()))
 }
 
-#[derive(Clone, Debug)]
+#[derive(Clone, Debug, Serialize)]
 pub struct FeatureVector {
     pub schema: FeatureSchema,
     pub values: Vec<f64>,
