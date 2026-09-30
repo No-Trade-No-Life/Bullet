@@ -308,3 +308,71 @@ fn continuous_oos_decision_prefix_survives_future_market_and_training_mutation()
         serde_json::to_vec(&b.decisions[20..]).unwrap()
     );
 }
+
+#[test]
+fn estimated_intercept_matches_independent_sklearn_weighted_and_unweighted_oracles() {
+    let oracle: serde_json::Value =
+        serde_json::from_str(include_str!("fixtures/xgboost-intercept-oracle.json")).unwrap();
+    let schema = FeatureSchema::new(vec!["a".into(), "b".into(), "c".into()]).unwrap();
+    let features: Vec<Vec<f64>> = serde_json::from_value(oracle["features"].clone()).unwrap();
+    let prediction_features: Vec<Vec<f64>> =
+        serde_json::from_value(oracle["prediction_features"].clone()).unwrap();
+    let rows: Vec<_> = prediction_features
+        .into_iter()
+        .map(|x| FeatureVector::new(schema.clone(), x).unwrap())
+        .collect();
+    for case in oracle["cases"].as_array().unwrap() {
+        let objective = if case["kind"] == "classification" {
+            Objective::BinaryLogistic
+        } else {
+            Objective::SquaredError
+        };
+        let targets: Vec<f64> = serde_json::from_value(case["targets"].clone()).unwrap();
+        let weights: Vec<f64> = serde_json::from_value(case["weights"].clone()).unwrap();
+        let expected: Vec<f64> = serde_json::from_value(case["predictions"].clone()).unwrap();
+        let (model, receipt) = XgboostTrainer::new(XgboostConfig {
+            objective,
+            rounds: 128,
+            learning_rate: 0.05,
+            min_child_weight: 20.0,
+            reg_lambda: 5.0,
+            seed: 20260903,
+            ..Default::default()
+        })
+        .unwrap()
+        .fit(&FitBatch {
+            schema: &schema,
+            features: &features,
+            targets: &targets,
+            weights: &weights,
+            model_vintage: "sklearn-intercept",
+        })
+        .unwrap();
+        assert_eq!(
+            model.predict_rows(&rows).unwrap(),
+            expected,
+            "{} weighted={}",
+            case["kind"],
+            case["weighted"]
+        );
+        let artifact = serde_json::to_value(model.artifact()).unwrap();
+        let native: serde_json::Value =
+            serde_json::from_str(artifact["model_json"].as_str().unwrap()).unwrap();
+        assert_eq!(
+            native["learner"]["learner_model_param"],
+            case["initial_intercept"]
+        );
+        assert_eq!(
+            native["learner"]["learner_model_param"]["boost_from_average"],
+            "1"
+        );
+        assert_ne!(
+            native["learner"]["learner_model_param"]["base_score"],
+            "[5E-1]"
+        );
+        assert_eq!(
+            receipt.parameters["initial_intercept"],
+            "estimated_from_training_data"
+        );
+    }
+}
