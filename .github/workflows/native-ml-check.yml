@@ -19,6 +19,7 @@ jobs:
         with:
           components: clippy
       - run: sudo apt-get update && sudo apt-get install --yes libclang-dev unzip
+      - run: cd vendor/lbfgsb && sha256sum --check SHA256SUMS
       - name: Linear-only backend without XGBoost provisioning
         run: |
           cargo clippy -p bullet-ml-training --no-default-features --features linear-backend --all-targets --locked -- -D warnings

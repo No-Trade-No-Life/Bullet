@@ -76,7 +76,11 @@
   "solver_crate": {
     "name": "lbfgsb",
     "version": "0.1.1",
-    "cargo_checksum": "70b0d1a3440f0ad7ec488c97ccd03e1d76f0114342be1a5fa17442b0b25e075f"
+    "cargo_checksum": "70b0d1a3440f0ad7ec488c97ccd03e1d76f0114342be1a5fa17442b0b25e075f",
+    "source_kind": "vendored published release with build-only header allowlist",
+    "source_manifest": "vendor/lbfgsb/SOURCE.json",
+    "patched_build_sha256": "3770888fdd4701a428b57271616bab31dd31d2ffee07973cdcf64b33f0254ba1",
+    "cargo_checksum_label": "original published crate archive, not a local Cargo.lock checksum"
   },
   "performance": [
     {
@@ -644,5 +648,109 @@
       "xgboost",
       "smartcore-linear"
     ]
-  }
+  },
+  "binding_patch_semantic_gate": [
+    {
+      "family": "logistic",
+      "rule": "exact bytes, no rounding; identical models/reports/ledger before and after bindgen scope patch",
+      "result": "PASS",
+      "files": [
+        {
+          "file": "model-0.json",
+          "sha256": "3ce3e38327f8f8b2dca331dc82b11c399e584b10db2b585225b550df24d8edd3"
+        },
+        {
+          "file": "fold-0.json",
+          "sha256": "56ab636d023c7f997aaa490a12bec977989bdbcbfa2e75237cfbe5e500f5ee28"
+        },
+        {
+          "file": "model-1.json",
+          "sha256": "1d78b22aff85030d3d36e9ebf89c530632a4c45e449a09fd73ed5f88fff87dbb"
+        },
+        {
+          "file": "fold-1.json",
+          "sha256": "d0cb3ddac4ce22946ffb37f527ebbd2d8bea564ba898ca47229e6f72530056c2"
+        },
+        {
+          "file": "model-2.json",
+          "sha256": "d34fdba14a32e33453feadb885b45e59f361f02fb6996c482b358c0a64c85ba0"
+        },
+        {
+          "file": "fold-2.json",
+          "sha256": "cf0d030f51877bdbfa8f8757c11bcced2df1fb4a3002865a2ab6fd258923f897"
+        },
+        {
+          "file": "model-3.json",
+          "sha256": "febd744abc0202c26e1dba35f49cc1fc58f7a1d8e8eebd86dd80c8b203abf78c"
+        },
+        {
+          "file": "fold-3.json",
+          "sha256": "6eb61507e5ec64cc9f93076561da75ecb49ca6c4696315e4dfeb41b8d9944061"
+        },
+        {
+          "file": "ledger.json",
+          "sha256": "264461ccf55b60108e1bbbb4ebec4b306a7dbdbc48ce00ceeb041802fc2c4db1"
+        }
+      ]
+    },
+    {
+      "family": "huber",
+      "rule": "exact bytes, no rounding; identical models/reports/ledger before and after bindgen scope patch",
+      "result": "PASS",
+      "files": [
+        {
+          "file": "model-0.json",
+          "sha256": "07bc131d78b91729eb04c926df356c516cac0a013809aff55c9ad7e6f6fb280b"
+        },
+        {
+          "file": "fold-0.json",
+          "sha256": "a655dd2024f078ed99975eb08ed5b0ae4dcfb6f314be530d8a318774bcbf145a"
+        },
+        {
+          "file": "model-1.json",
+          "sha256": "c0c3dc4b69411c6d7753748907ae9a767e64c81a835fb37a13a457980e0674a2"
+        },
+        {
+          "file": "fold-1.json",
+          "sha256": "4bedaf6ca1a011cc91e85551e1ed4ff96668f6998994b05846d9a71c48b2fa3a"
+        },
+        {
+          "file": "model-2.json",
+          "sha256": "058af04b1200ad4c92707cf024da08787a6dea11a74d4f770970865f411c4077"
+        },
+        {
+          "file": "fold-2.json",
+          "sha256": "bd0a7e18c1ea9e912d1849e7714d194fd4ef9e3f3db4f911f3c762bd3e9594d0"
+        },
+        {
+          "file": "model-3.json",
+          "sha256": "05e2055c0fb0472730277fabb6a79e094f7a0cc30b3d09a16c6ce8ac9703593a"
+        },
+        {
+          "file": "fold-3.json",
+          "sha256": "87ea4e5618041b79edd0589e5a45f5dc6c90a09df58f6a0c97b654aa73785451"
+        },
+        {
+          "file": "ledger.json",
+          "sha256": "ac3e158dbd5b4461470f897fbbc917e3ff03d065f373b4e8de65d2f977e6c1da"
+        }
+      ]
+    }
+  ],
+  "binding_patch_target_rechecks": [
+    {
+      "family": "logistic",
+      "market_rows": 2048,
+      "elapsed_sec": 0.848988584,
+      "before_after_models_reports_ledger": "byte-exact",
+      "artifact_reload_decisions_and_ledger_exact": true
+    },
+    {
+      "family": "huber",
+      "market_rows": 2048,
+      "elapsed_sec": 0.811699292,
+      "before_after_models_reports_ledger": "byte-exact",
+      "artifact_reload_decisions_and_ledger_exact": true
+    }
+  ]
 }

@@ -12,9 +12,13 @@ members = [
   "crates/bullet",
   "crates/bullet-live",
 ]
+exclude = ["vendor/lbfgsb"]
 resolver = "3"
 
 [workspace.package]
 edition = "2024"
 license = "Apache-2.0"
 repository = "https://github.com/No-Trade-No-Life/Bullet"
+
+[patch.crates-io]
+lbfgsb = { path = "vendor/lbfgsb" }

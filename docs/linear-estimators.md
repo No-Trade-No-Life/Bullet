@@ -151,7 +151,7 @@ trajectories can differ. Do not claim SciPy iteration equivalence, original SOTA
 model parity, or universal cross-platform byte-identical training.
 
 The released crate is BSD-3-Clause; exact source identity is its version and
-Cargo.lock checksum:
+published-crate checksum (also recorded in the vendored source manifest):
 
 ```text
 lbfgsb 0.1.1
@@ -162,6 +162,20 @@ Its packaged VCS metadata is marked dirty; the Git revision alone does not
 identify a clean source tree. The crate builds bundled reference miniCBLAS and
 native solver code statically; it does not require a separately provisioned
 optimizer shared library.
+
+### Build-only binding compatibility patch
+
+`vendor/lbfgsb` retains the pinned release's Rust wrapper, native build inputs
+and both licenses. A root Cargo patch selects it. The only build-script change
+limits bindgen to declarations in `lbfgsb.h`, excluding unrelated system math
+APIs. This fixes bindgen 0.65.1's unsupported AArch64 vector-PCS ABI error with
+Ubuntu 24.04/glibc 2.39; no compiler macros, native floating-point flags or
+numerical source files are changed. The same filter is used on every platform.
+
+`vendor/lbfgsb/SOURCE.json` records each retained upstream file's hash and the
+build patch; `SHA256SUMS` is checked in native CI. See its `SOURCE.md` for the
+Bullet ML maintainers' ownership and removal criteria. This is a documented,
+removable build compatibility patch, not an estimator fallback or replacement.
 
 ## Evidence boundaries
 
@@ -205,6 +219,9 @@ cover those boundaries. Generic rolling selection, accounting and schedule
 routing are reused unchanged. There are no new compatibility fallbacks, asset
 switches, preprocessing guesses, inherited optimizer state or parameter search.
 The native lock and task adapter are explicit upstream safety/control boundaries.
+The single build compatibility patch is the header allowlist described above;
+remove it after a pinned upstream release fixes the binding scope and passes
+the three-platform numerical, artifact and rolling-replay gates.
 
 Primary references: [lbfgsb 0.1.1](https://docs.rs/lbfgsb/0.1.1/lbfgsb/),
 [sklearn 1.5.1 logistic source](https://github.com/scikit-learn/scikit-learn/blob/1.5.1/sklearn/linear_model/_logistic.py),
