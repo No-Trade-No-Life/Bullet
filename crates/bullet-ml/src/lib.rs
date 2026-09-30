@@ -6,6 +6,11 @@
 //! The resulting strategy still runs through `bullet-strategy` and
 //! `bullet-evaluation`.
 
+mod preprocessing;
+mod scheduled;
+pub use preprocessing::{FeatureTransform, PreprocessedModel};
+pub use scheduled::{ModelWindow, ScheduledMlStrategy};
+
 use std::convert::Infallible;
 use std::error::Error;
 use std::fmt;

@@ -1,0 +1,32 @@
+name: native-ml-check
+
+on:
+  workflow_call:
+
+permissions:
+  contents: read
+
+jobs:
+  native:
+    strategy:
+      fail-fast: false
+      matrix:
+        runner: [ubuntu-latest, ubuntu-24.04-arm]
+    runs-on: ${{ matrix.runner }}
+    steps:
+      - uses: actions/checkout@v4
+      - uses: dtolnay/rust-toolchain@stable
+        with:
+          components: clippy
+      - run: sudo apt-get update && sudo apt-get install --yes libclang-dev unzip
+      - run: scripts/prepare-xgboost.sh
+      - run: cargo --config target/native/xgboost-3.2.0/cargo.toml clippy -p bullet-ml-training --all-targets --all-features --locked -- -D warnings
+      - run: cargo --config target/native/xgboost-3.2.0/cargo.toml test -p bullet-ml -p bullet-ml-training --all-features --locked
+      - run: cargo --config target/native/xgboost-3.2.0/cargo.toml run -p bullet-ml-training --features xgboost-backend --example rolling_xgboost --locked -- 128 target/native-oos-evidence
+      - uses: actions/upload-artifact@v4
+        with:
+          name: native-ml-evidence-${{ matrix.runner }}
+          path: |
+            target/native-oos-evidence/
+            target/native/xgboost-3.2.0/native-provenance.txt
+          if-no-files-found: error

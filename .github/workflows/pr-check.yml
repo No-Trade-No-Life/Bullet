@@ -7,7 +7,7 @@ permissions:
   contents: read
 
 jobs:
-  pr-check:
+  rust-check:
     runs-on: ubuntu-latest
     steps:
       - uses: actions/checkout@v4
@@ -16,5 +16,14 @@ jobs:
           components: rustfmt, clippy
       - run: python3 -m unittest discover -s scripts/tests
       - run: cargo fmt --check
-      - run: cargo clippy --workspace --all-targets -- -D warnings
-      - run: cargo test --workspace
+      - run: cargo clippy --workspace --all-targets --locked -- -D warnings
+      - run: cargo test --workspace --locked
+      - run: cargo clippy -p bullet-ml-training --no-default-features --all-targets --locked -- -D warnings
+  native-ml:
+    uses: ./.github/workflows/native-ml-check.yml
+  pr-check:
+    if: always()
+    needs: [rust-check, native-ml]
+    runs-on: ubuntu-latest
+    steps:
+      - run: test '${{ needs.rust-check.result }}' = success && test '${{ needs.native-ml.result }}' = success

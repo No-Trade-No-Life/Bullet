@@ -1,0 +1,147 @@
+{
+  "date": "2026-09-30",
+  "scope": "bounded synthetic rolling integration only; not frozen SOTA retraining or full-scale performance evidence",
+  "platform": "macOS ARM64",
+  "build_profile": "debug",
+  "result": "PASS",
+  "target": {
+    "N_full": 2048,
+    "T_budget_sec": 30.0,
+    "N_definition": "synthetic daily market rows; 4 vintages, 2 features, 16 boosting rounds; training volume approx N rows across folds"
+  },
+  "sampling_method": "three bounded subprocess runs, 30-second timeout each",
+  "instrumentation_decision": "workloads finish below one second; completed sample summaries provide N-T observations without high-frequency instrumentation",
+  "samples": [
+    {
+      "artifact_reload_decisions_and_ledger_exact": true,
+      "audit": {
+        "config_sha256": "adc983f1aee20ca9008a70a106028a51b8a4c6d91a433816be362a272c785eed",
+        "decision_count": 128,
+        "decision_sha256": "9ed428c9b392eebf542a0799255ff55e6d84aa3a17982e8f835aea768fb0b311",
+        "execution_count": 15,
+        "interval_count": 129,
+        "ledger_sha256": "81c034ae1251c8da3531db9c3700d738c147d651fb15a262e53e302741f9b8cb",
+        "market_point_count": 130,
+        "market_sha256": "d30853362ec03114634c59d755093dff1ff82b87bcc7c8e55479b0a19bfc7952",
+        "run_sha256": "61a944742598208bf5d73d15b6eaf09cb91754929f92ff0918c2c1c9ca79e6e2",
+        "schema_version": 1
+      },
+      "boost_rounds": 16,
+      "elapsed_sec": 0.159119833,
+      "features": 2,
+      "market_rows": 256,
+      "native_version": "3.2.0",
+      "oos_decisions": 128,
+      "scope": "bounded synthetic native rolling integration, not SOTA training parity",
+      "training_folds": 4,
+      "training_sec": 0.055851625,
+      "wrapper_version": "3.0.6",
+      "command": "target/debug/examples/rolling_xgboost 256 target/native-gate-256",
+      "wall_sec": 1.2945215,
+      "status": "completed",
+      "timeout_sec": 30
+    },
+    {
+      "artifact_reload_decisions_and_ledger_exact": true,
+      "audit": {
+        "config_sha256": "ba8f19e3cc53ab12b7d6bd54a4f5032c988bb5fad9a2f90420d53e47041a7c1a",
+        "decision_count": 256,
+        "decision_sha256": "c295d6d360bf21c31367ae6c3a4ccbe47cc123024d133fa29ebce2fbe5e12816",
+        "execution_count": 21,
+        "interval_count": 257,
+        "ledger_sha256": "56dbb97fe61c53fd29073a4977ed6b6c5672e10c1dc94bec575c886cd03c3647",
+        "market_point_count": 258,
+        "market_sha256": "08ce2ee6d44f1c1e311395cc12d4087b48d53162b652c3f1766c490ce14b6142",
+        "run_sha256": "02d361bfb21b1ae4bc85cd6bc1e4e167ceef1a8b414679c355e0329eea9f4b21",
+        "schema_version": 1
+      },
+      "boost_rounds": 16,
+      "elapsed_sec": 0.230335583,
+      "features": 2,
+      "market_rows": 512,
+      "native_version": "3.2.0",
+      "oos_decisions": 256,
+      "scope": "bounded synthetic native rolling integration, not SOTA training parity",
+      "training_folds": 4,
+      "training_sec": 0.046306916,
+      "wrapper_version": "3.0.6",
+      "command": "target/debug/examples/rolling_xgboost 512 target/native-gate-512",
+      "wall_sec": 0.23565520799999984,
+      "status": "completed",
+      "timeout_sec": 30
+    },
+    {
+      "artifact_reload_decisions_and_ledger_exact": true,
+      "audit": {
+        "config_sha256": "8f61bafd7aba62fed8440c943253831d921342e1c0aa8dc94e117307b75c86d1",
+        "decision_count": 512,
+        "decision_sha256": "6ce8eb253c652fc444a4c9fe8f2365e165f53c8ccc8dbf0a5d43dc848a296fd9",
+        "execution_count": 46,
+        "interval_count": 513,
+        "ledger_sha256": "21798f4bfe193c3c3c6943f7337d7b2c6564f69e8626b15dd85de1616ec6b46f",
+        "market_point_count": 514,
+        "market_sha256": "9542bd9cd8fc3bb77fdd7162755cf8b8c325bdef37b6bd66e3b80a81d9f055ef",
+        "run_sha256": "a60adc768003c2784cb0bf562a83a9b7f441e6af9a8dc00cc490b88443c95394",
+        "schema_version": 1
+      },
+      "boost_rounds": 16,
+      "elapsed_sec": 0.436960334,
+      "features": 2,
+      "market_rows": 1024,
+      "native_version": "3.2.0",
+      "oos_decisions": 512,
+      "scope": "bounded synthetic native rolling integration, not SOTA training parity",
+      "training_folds": 4,
+      "training_sec": 0.07928275,
+      "wrapper_version": "3.0.6",
+      "command": "target/debug/examples/rolling_xgboost 1024 target/native-gate-1024",
+      "wall_sec": 0.4438169999999999,
+      "status": "completed",
+      "timeout_sec": 30
+    }
+  ],
+  "scaling": {
+    "linear_estimate_sec": 0.873920668,
+    "power_law_p": 0.7286943274141839,
+    "power_law_estimate_sec": 0.6921923920244014,
+    "local_slope_estimate_sec": 0.850209836,
+    "conservative_estimate_sec": 2.621762004
+  },
+  "full": {
+    "artifact_reload_decisions_and_ledger_exact": true,
+    "audit": {
+      "config_sha256": "a357fe72dc61d69ef826f573f4ad4a76cdb68e5ec0149bcec3e2821adab74de9",
+      "decision_count": 1024,
+      "decision_sha256": "136cb8f54dd26068b7ac7c5656e453a16bf054091d93386768385ea297cebff6",
+      "execution_count": 71,
+      "interval_count": 1025,
+      "ledger_sha256": "e742d1febb1d363af9d214bd5cc77ed26ed964d8bf7a997862f276f1576edfab",
+      "market_point_count": 1026,
+      "market_sha256": "a304d83490f375342793611727086a4d9f823320ae88d8a8c3edcff8a405f441",
+      "run_sha256": "73c51974b163c2c73e821f2854f104cfbb5857f1c22c63333fb1e5692fe787d5",
+      "schema_version": 1
+    },
+    "boost_rounds": 16,
+    "elapsed_sec": 0.844210458,
+    "features": 2,
+    "market_rows": 2048,
+    "native_version": "3.2.0",
+    "oos_decisions": 1024,
+    "scope": "bounded synthetic native rolling integration, not SOTA training parity",
+    "training_folds": 4,
+    "training_sec": 0.1472475,
+    "wrapper_version": "3.0.6"
+  },
+  "semantic_gates": [
+    "direct community wrapper prediction equality for weighted classification and regression",
+    "artifact reload exact decisions and ledgers",
+    "future training/market suffix mutation preserves earlier reports/models/decision prefix"
+  ],
+  "source_sha256": {
+    "crates/bullet-ml-training/src/rolling.rs": "da7c4b15d9376cd261553d8aef84454246c805b3011fe56be2fb5a5b4ebc2c1a",
+    "crates/bullet-ml-training/src/xgboost.rs": "5b94a650a2554ffeddfcbf4fbb82a41fdbf51f96c782859a89c7335423b090de",
+    "crates/bullet-ml/src/scheduled.rs": "ea8a4296ca0b4138e0d600f82153b6441c3d5d09bc89d0438985e84177119f10",
+    "crates/bullet-ml/src/preprocessing.rs": "feedaf0fbbd556bec2dbaab60fcb8ff791b5c6143f00333f750bb384f8bad8bb",
+    "crates/bullet-ml-training/examples/rolling_xgboost.rs": "68bef848bb5757e99da83a706aa30294395ee4f8d097aafb102d05e58c4aa652"
+  }
+}

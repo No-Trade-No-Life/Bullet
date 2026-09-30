@@ -64,7 +64,7 @@ The callback receives only completed observations and a history slice ending at 
 cargo run -p bullet-strategy --example momentum
 ```
 
-## Pure-Rust ML training
+## Rust ML training
 
 `bullet-ml-training` adds chronological feature/label contracts, explicit train/validation splits, expanding walk-forward plans, and a SmartCore-backed pure-Rust linear trainer. It exports the existing serializable `bullet-ml::LinearModel` format, so training and inference stay in one Rust model contract. See [`docs/strategy-training.md`](docs/strategy-training.md).
 
@@ -74,6 +74,15 @@ cargo run -p bullet-ml-training --example train_linear
 
 The training layer does not shuffle time-series rows and rejects feature/decision/label ordering violations.
 
+The optional `xgboost-backend` adds native XGBoost 3.2.0 through the community
+`xgb` 3.0.6 wrapper. `RollingPlan` selects timestamp-based sliding windows with
+per-row mature-label checks, per-vintage standardization and sample weights.
+`ScheduledMlStrategy` routes model vintages into continuous out-of-sample target
+replay. Rust APIs and orchestration may use native numerical libraries: the
+training/inference chain has no Python interpreter or SDK dependency. See
+[`docs/native-ml-rolling.md`](docs/native-ml-rolling.md) for setup, guarantees,
+artifacts, and the deliberately bounded example.
+
 ## Pure-Rust ML strategies
 
 `bullet-ml` adds causal feature pipelines, feature-schema validation, pure-Rust model inference, prediction diagnostics, warmup policy, and prediction-to-target mapping above `bullet-strategy`. It includes a rolling-price feature pipeline, deterministic `LinearModel`, and `ScoreToExposure` mapper. No Python runtime or Python SDK is required. See [`docs/strategy-ml.md`](docs/strategy-ml.md).
@@ -82,7 +91,7 @@ The training layer does not shuffle time-series rows and rejects feature/decisio
 cargo run -p bullet-ml --example linear_momentum
 ```
 
-The crate does not train models or search features. It owns the inference contract; model training/export remains an external research step.
+The crate does not train models or search features. It owns the inference contract; model training/export is handled by `bullet-ml-training` or external research code.
 
 ## Fixed-capital research replay
 

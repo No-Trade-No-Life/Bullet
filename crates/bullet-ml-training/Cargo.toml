@@ -10,6 +10,7 @@ description = "Causal chronological ML dataset and pure-Rust training layer for 
 [features]
 default = ["smartcore-backend"]
 smartcore-backend = ["dep:smartcore"]
+xgboost-backend = ["dep:xgb", "dep:tempfile"]
 
 [dependencies]
 bullet-ml = { path = "../bullet-ml" }
@@ -17,7 +18,17 @@ serde = { version = "1.0.228", features = ["derive"] }
 serde_json = { version = "1.0.145", features = ["float_roundtrip"] }
 sha2 = "0.10.9"
 smartcore = { version = "=0.6.15", optional = true }
+xgb = { version = "=3.0.6", optional = true }
+tempfile = { version = "3", optional = true }
+
+[dev-dependencies]
+bullet-strategy = { path = "../bullet-strategy" }
+bullet-evaluation = { path = "../bullet-evaluation" }
 
 [[example]]
 name = "train_linear"
 required-features = ["smartcore-backend"]
+
+[[example]]
+name = "rolling_xgboost"
+required-features = ["xgboost-backend"]
