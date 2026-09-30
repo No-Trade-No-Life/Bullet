@@ -83,7 +83,15 @@ training/inference chain has no Python interpreter or SDK dependency. See
 [`docs/native-ml-rolling.md`](docs/native-ml-rolling.md) for setup, guarantees,
 artifacts, and the deliberately bounded example.
 
+The optional `linear-backend` adds weighted **linear LogisticRegression** and
+**concomitant-scale Huber regression**, using the pinned community native
+L-BFGS-B solver. Both export native-free Rust inference artifacts and reuse the
+same rolling, weighting, scaling and audit contracts. See
+[`docs/linear-estimators.md`](docs/linear-estimators.md) for mathematical
+objectives, convergence budgets, oracle tolerances and runnable examples.
+
 ## Pure-Rust ML strategies
+
 
 `bullet-ml` adds causal feature pipelines, feature-schema validation, pure-Rust model inference, prediction diagnostics, warmup policy, and prediction-to-target mapping above `bullet-strategy`. It includes a rolling-price feature pipeline, deterministic `LinearModel`, and `ScoreToExposure` mapper. No Python runtime or Python SDK is required. See [`docs/strategy-ml.md`](docs/strategy-ml.md).
 
@@ -263,7 +271,7 @@ bullet-cli             compiles and runs a backtest strategy source file
 bullet-live            current live-inference and target-state adapter
 bullet-strategy        pure-Rust causal strategy runtime for target evaluation
 bullet-ml              pure-Rust causal features, models, and target mapping
-bullet-ml-training     chronological pure-Rust ML datasets and training backends
+bullet-ml-training     Rust chronological training with optional native backends
 ```
 
 ## Development

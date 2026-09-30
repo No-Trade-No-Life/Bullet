@@ -26,10 +26,11 @@ SOTA parity has been reproduced by the training layer.
 - Native JSON artifacts, model/report hash checks, scheduled OOS target replay,
   and training-report hashes included in decision diagnostics/provenance.
 
-Classification here is XGBoost `binary:logistic`, **not** linear
-LogisticRegression. Huber/linear-logistic trainers, multi-output ensembles,
-automatic parameter/feature/label search, online train-state checkpoints, and a
-full-scale streaming trainer are not part of this change.
+XGBoost `binary:logistic` is boosted-tree classification. The separate
+[`linear-backend`](linear-estimators.md) provides linear LogisticRegression and
+concomitant-scale Huber using the same rolling lifecycle. Multi-output ensembles,
+automatic parameter/feature/label search, online train-state checkpoints and a
+full-scale streaming trainer remain outside the built-in backend surface.
 
 ## Build and run without Python
 
@@ -139,7 +140,9 @@ untrusted native model payloads. File JSON serialization is used deliberately:
 `xgb 3.0.6`'s buffer-save wrapper does not explicitly NUL-terminate its C config
 string. This compatibility path is owned by the native adapter and can be
 removed after an upstream fixed release passes identical artifact roundtrips.
-There is no handwritten FFI implementation in Bullet.
+The XGBoost adapter uses the community wrapper without a handwritten C ABI.
+The linear backend has a private bounded adapter over its community solver
+crate's already-generated `setulb` binding.
 
 `ScheduledMlStrategy` owns one pipeline and one mapper across all model windows.
 Their state is not reset at retraining boundaries. Warmup policy applies only

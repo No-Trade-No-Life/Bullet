@@ -5,12 +5,13 @@ edition.workspace = true
 license.workspace = true
 repository.workspace = true
 
-description = "Causal chronological ML dataset and pure-Rust training layer for Bullet"
+description = "Causal chronological ML datasets and Python-free training orchestration for Bullet"
 
 [features]
 default = ["smartcore-backend"]
 smartcore-backend = ["dep:smartcore"]
 xgboost-backend = ["dep:xgb", "dep:tempfile"]
+linear-backend = ["dep:lbfgsb"]
 
 [dependencies]
 bullet-ml = { path = "../bullet-ml" }
@@ -20,6 +21,7 @@ sha2 = "0.10.9"
 smartcore = { version = "=0.6.15", optional = true }
 xgb = { version = "=3.0.6", optional = true }
 tempfile = { version = "3", optional = true }
+lbfgsb = { version = "=0.1.1", optional = true }
 
 [dev-dependencies]
 bullet-strategy = { path = "../bullet-strategy" }
@@ -32,3 +34,7 @@ required-features = ["smartcore-backend"]
 [[example]]
 name = "rolling_xgboost"
 required-features = ["xgboost-backend"]
+
+[[example]]
+name = "rolling_linear"
+required-features = ["linear-backend"]

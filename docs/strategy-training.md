@@ -2,7 +2,8 @@
 
 `bullet-ml-training` adds a chronological training layer above `bullet-ml`.
 SmartCore is enabled by the default `smartcore-backend` feature. The optional
-`xgboost-backend` uses the community Rust wrapper and native XGBoost. Rust
+`xgboost-backend` uses the community Rust wrapper and native XGBoost; optional
+`linear-backend` adds native L-BFGS-B-backed LogisticRegression and Huber. Rust
 interfaces and orchestration are the boundary; native libraries are permitted
 without a Python interpreter, SDK, or subprocess. The backend is isolated behind the training crate; Bullet's strategy
 runtime and accounting crates do not depend on a particular estimator.
@@ -68,7 +69,11 @@ For timestamp-based sliding windows, per-vintage transforms and weights,
 model-availability routing, native artifacts, and bounded OOS replay, see
 [`native-ml-rolling.md`](native-ml-rolling.md). The existing `ChronologicalSplit`
 and expanding `WalkForwardPlan` API remains available for OLS/ridge callers.
-LogisticRegression and Huber training backends are not provided by this change.
+Weighted binary linear LogisticRegression and joint coefficient/intercept/scale
+Huber training are available through `linear-backend`. Their `RollingTrainer`
+implementations export `LogisticRegressionModel` and `HuberRegressionModel`,
+respectively; inference and JSON reload require neither the native optimizer
+nor Python. See [`linear-estimators.md`](linear-estimators.md).
 
 Model training remains causal and chronological. Random row shuffling and
 random cross-validation are intentionally not part of this surface.
