@@ -1,8 +1,10 @@
-# Pure-Rust ML training
+# Rust ML training
 
 `bullet-ml-training` adds a chronological training layer above `bullet-ml`.
-The first backend is SmartCore, enabled by the default `smartcore-backend`
-feature. The backend is isolated behind the training crate; Bullet's strategy
+SmartCore is enabled by the default `smartcore-backend` feature. The optional
+`xgboost-backend` uses the community Rust wrapper and native XGBoost. Rust
+interfaces and orchestration are the boundary; native libraries are permitted
+without a Python interpreter, SDK, or subprocess. The backend is isolated behind the training crate; Bullet's strategy
 runtime and accounting crates do not depend on a particular estimator.
 
 ## Dataset contract
@@ -22,8 +24,8 @@ The dataset also requires:
 
 The training layer never shuffles rows. `ChronologicalSplit` and
 `WalkForwardPlan` make train/validation windows explicit and expanding. A split
-is rejected when the final training label extends past the first validation
-feature timestamp; this is the purging boundary for overlapping forward labels.
+is rejected when **any** training label extends past the first validation
+decision timestamp; this is the purging boundary for overlapping forward labels.
 
 ## Training and inference
 
@@ -57,10 +59,16 @@ cargo run -p bullet-ml-training --example train_linear
 
 ## Backend scope
 
-The current release starts with ordinary least squares and ridge regression for
-small, transparent tabular models. The trainer/backend boundary leaves room for
-classification and neural/tensor backends later without changing the causal
-dataset contract or the inference model/strategy interfaces.
+The default backend provides OLS and ridge regression. The optional native
+backend provides binary logistic boosted trees and squared-error boosted-tree
+regression. These are distinct algorithms; XGBoost's binary-logistic objective
+is not scikit-learn's linear LogisticRegression.
+
+For timestamp-based sliding windows, per-vintage transforms and weights,
+model-availability routing, native artifacts, and bounded OOS replay, see
+[`native-ml-rolling.md`](native-ml-rolling.md). The existing `ChronologicalSplit`
+and expanding `WalkForwardPlan` API remains available for OLS/ridge callers.
+LogisticRegression and Huber training backends are not provided by this change.
 
 Model training remains causal and chronological. Random row shuffling and
 random cross-validation are intentionally not part of this surface.

@@ -5,13 +5,19 @@
 //! validation boundary explicit. Backends convert a validated dataset into
 //! the serializable inference models provided by `bullet-ml`.
 
+pub mod rolling;
+#[cfg(feature = "xgboost-backend")]
+pub mod xgboost;
+
 use std::error::Error;
 use std::fmt;
 use std::ops::Range;
 
 use sha2::{Digest, Sha256};
 
-use bullet_ml::{FeatureSchema, FeatureVector, LinearModel, ModelError, ModelMetadata};
+use bullet_ml::{FeatureSchema, FeatureVector, LinearModel};
+#[cfg(feature = "smartcore-backend")]
+use bullet_ml::{ModelError, ModelMetadata};
 use serde::{Deserialize, Serialize};
 
 #[derive(Clone, Debug, Serialize)]
@@ -31,6 +37,9 @@ impl TrainingExample {
         features: FeatureVector,
         target: f64,
     ) -> Result<Self, TrainingError> {
+        features
+            .validate()
+            .map_err(|e| TrainingError(e.to_string()))?;
         if feature_end_ns > decision_time_ns {
             return Err(TrainingError(
                 "feature_end_ns must not be after decision_time_ns".into(),
@@ -73,6 +82,13 @@ impl TrainingDataset {
         }
         let mut previous_decision_time = None;
         for (index, example) in examples.iter().enumerate() {
+            TrainingExample::new(
+                example.feature_end_ns,
+                example.decision_time_ns,
+                example.label_end_ns,
+                example.features.clone(),
+                example.target,
+            )?;
             if example.features.schema.sha256 != schema.sha256 {
                 return Err(TrainingError(format!(
                     "training row {index} has a different feature schema"
@@ -122,9 +138,11 @@ impl TrainingDataset {
                 "chronological split is invalid for dataset".into(),
             ));
         }
-        let last_train = &self.examples[split.train_end_exclusive - 1];
         let first_validation = &self.examples[split.train_end_exclusive];
-        if last_train.label_end_ns > first_validation.decision_time_ns {
+        if self.examples[..split.train_end_exclusive]
+            .iter()
+            .any(|row| row.label_end_ns > first_validation.decision_time_ns)
+        {
             return Err(TrainingError(
                 "training label crosses the validation feature boundary".into(),
             ));
@@ -270,6 +288,7 @@ pub enum LinearSolver {
 }
 
 impl LinearSolver {
+    #[cfg(feature = "smartcore-backend")]
     fn name(&self) -> String {
         match self {
             Self::OrdinaryLeastSquares => "ordinary_least_squares".into(),
@@ -331,6 +350,7 @@ pub fn train_linear(
     ))
 }
 
+#[cfg(feature = "smartcore-backend")]
 fn metrics(weights: &[f64], bias: f64, examples: &[TrainingExample]) -> (f64, f64, Option<f64>) {
     let predictions: Vec<f64> = examples
         .iter()
@@ -462,6 +482,7 @@ mod tests {
     use super::*;
     use bullet_ml::FeatureSchema;
 
+    #[cfg(feature = "smartcore-backend")]
     fn dataset() -> TrainingDataset {
         let schema = FeatureSchema::new(vec!["x".into()]).expect("schema");
         let examples = (0..8)

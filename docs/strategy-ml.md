@@ -57,6 +57,19 @@ provenance, accounting, and audit output.
 ## Non-goals
 
 `bullet-ml` does not train models, search features, infer labels, or silently
-convert Python model objects. Training and export remain external research
-steps; the deployed/replayed inference contract is pure Rust and must provide a
+convert Python model objects. Training and export belong to `bullet-ml-training` or external research
+code; the deployed/replayed inference contract is pure Rust and must provide a
 stable feature schema and model vintage.
+
+## Scheduled models
+
+`ScheduledMlStrategy` routes by the completed observation's decision timestamp,
+not the next execution timestamp. `ModelWindow` has an explicit fit cutoff and
+half-open availability interval. One feature pipeline and mapper survive every
+model switch. Gaps, premature use, expired models, overlapping windows, and
+conflicting mapper-vintage metadata are rejected rather than silently reusing a
+model. `PreprocessedModel` applies each vintage's serialized training-fitted
+transform. See [`native-ml-rolling.md`](native-ml-rolling.md).
+
+Rust is the strategy and model-interface language. Implementations can call
+native libraries through Rust bindings; no Python interpreter is required.
