@@ -1,10 +1,14 @@
-//! Pure-Rust causal ML training for Bullet.
+//! Rust causal ML training orchestration with optional native backends for Bullet.
 //!
 //! The training layer is deliberately chronological: it rejects malformed
 //! feature/label time ordering, never shuffles rows, and makes the train/
 //! validation boundary explicit. Backends convert a validated dataset into
 //! the serializable inference models provided by `bullet-ml`.
 
+#[cfg(feature = "linear-backend")]
+mod lbfgsb_solver;
+#[cfg(feature = "linear-backend")]
+pub mod linear_estimators;
 pub mod rolling;
 #[cfg(feature = "xgboost-backend")]
 pub mod xgboost;

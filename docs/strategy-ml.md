@@ -32,11 +32,13 @@ The three boundaries are explicit:
 
 ## Built-in components
 
-The initial crate provides:
+The crate provides:
 
 - `RollingPriceFeatures`: causal open-to-open returns for configured lookbacks;
 - `LinearModel`: deterministic weighted-sum inference with a serialized model
   metadata and feature-schema contract;
+- `LogisticRegressionModel`: stable class-1 probability with class order `[0,1]`;
+- `HuberRegressionModel`: linear prediction plus persisted fitted scale;
 - `ScoreToExposure`: threshold mapping from a score to long, flat, or short
   normalized exposure;
 - `WarmupPolicy`: explicit hold or flat behavior before enough history exists.
@@ -73,3 +75,7 @@ transform. See [`native-ml-rolling.md`](native-ml-rolling.md).
 
 Rust is the strategy and model-interface language. Implementations can call
 native libraries through Rust bindings; no Python interpreter is required.
+
+The two fitted linear artifacts validate schema, parameters, vintage and model
+kind before inference. Their JSON roundtrips need no native solver. Training
+contracts and examples are in [`linear-estimators.md`](linear-estimators.md).

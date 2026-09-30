@@ -6,6 +6,8 @@
 //! The resulting strategy still runs through `bullet-strategy` and
 //! `bullet-evaluation`.
 
+mod linear_estimators;
+pub use linear_estimators::{HuberRegressionModel, LogisticRegressionModel, logistic_probability};
 mod preprocessing;
 mod scheduled;
 pub use preprocessing::{FeatureTransform, PreprocessedModel};

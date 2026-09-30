@@ -1,0 +1,756 @@
+{
+  "scope": "Synthetic estimator/rolling integration; not SOTA training parity",
+  "profile": "debug",
+  "platform": "macOS ARM64",
+  "oracle": {
+    "versions": {
+      "sklearn": "1.5.1",
+      "scipy": "1.13.1",
+      "numpy": "1.26.4"
+    },
+    "fixture_sha256": "f6aaa3d7bbb3ab8b8ea75b7991e67da4c537431b6ee6cb5d88fc0487ff63bfdb",
+    "cases": 8,
+    "coefficient_atol": 1.0e-05,
+    "prediction_atol": 2.0e-05,
+    "scale_atol": 1.0e-05,
+    "result": "PASS",
+    "per_case_observed_errors": [
+      {
+        "case": "logistic-intercept-True-weighted-True",
+        "coefficient_max_abs_error": 1.871242621964697e-08,
+        "intercept_abs_error": 1.0007193018690685e-08,
+        "prediction_max_abs_error": 8.893089487038708e-09,
+        "scale_abs_error": null
+      },
+      {
+        "case": "logistic-intercept-True-weighted-False",
+        "coefficient_max_abs_error": 3.442085322324928e-08,
+        "intercept_abs_error": 1.5634513808593375e-08,
+        "prediction_max_abs_error": 1.3767780249196448e-08,
+        "scale_abs_error": null
+      },
+      {
+        "case": "logistic-intercept-False-weighted-True",
+        "coefficient_max_abs_error": 1.4392229380488786e-08,
+        "intercept_abs_error": 0.0,
+        "prediction_max_abs_error": 4.300943878821073e-09,
+        "scale_abs_error": null
+      },
+      {
+        "case": "logistic-intercept-False-weighted-False",
+        "coefficient_max_abs_error": 1.8041124150158794e-16,
+        "intercept_abs_error": 0.0,
+        "prediction_max_abs_error": 1.1102230246251565e-16,
+        "scale_abs_error": null
+      },
+      {
+        "case": "huber-intercept-True-weighted-True",
+        "coefficient_max_abs_error": 2.7755575615628914e-16,
+        "intercept_abs_error": 4.440892098500626e-16,
+        "prediction_max_abs_error": 1.7763568394002505e-15,
+        "scale_abs_error": 1.1102230246251565e-16
+      },
+      {
+        "case": "huber-intercept-True-weighted-False",
+        "coefficient_max_abs_error": 1.1102230246251565e-16,
+        "intercept_abs_error": 4.440892098500626e-16,
+        "prediction_max_abs_error": 8.881784197001252e-16,
+        "scale_abs_error": 5.551115123125783e-17
+      },
+      {
+        "case": "huber-intercept-False-weighted-True",
+        "coefficient_max_abs_error": 2.220446049250313e-16,
+        "intercept_abs_error": 0.0,
+        "prediction_max_abs_error": 8.881784197001252e-16,
+        "scale_abs_error": 2.220446049250313e-16
+      },
+      {
+        "case": "huber-intercept-False-weighted-False",
+        "coefficient_max_abs_error": 6.661338147750939e-16,
+        "intercept_abs_error": 0.0,
+        "prediction_max_abs_error": 1.7763568394002505e-15,
+        "scale_abs_error": 2.220446049250313e-16
+      }
+    ]
+  },
+  "solver_crate": {
+    "name": "lbfgsb",
+    "version": "0.1.1",
+    "cargo_checksum": "70b0d1a3440f0ad7ec488c97ccd03e1d76f0114342be1a5fa17442b0b25e075f",
+    "source_kind": "vendored published release with build-only header allowlist",
+    "source_manifest": "vendor/lbfgsb/SOURCE.json",
+    "patched_build_sha256": "3770888fdd4701a428b57271616bab31dd31d2ffee07973cdcf64b33f0254ba1",
+    "cargo_checksum_label": "original published crate archive, not a local Cargo.lock checksum"
+  },
+  "performance": [
+    {
+      "scope": "bounded synthetic debug integration only, not full BTC/ETH/SOL training",
+      "family": "logistic",
+      "target": {
+        "N_full": 2048,
+        "T_budget_sec": 30.0,
+        "N_definition": "market rows, 4 rolling vintages x (N/4 training rows) x 2 features; variable optimizer evaluations reported per fold"
+      },
+      "program_type": "progress_observable",
+      "instrumentation_decision": "per-fit progress logs; subsecond internal runs sampled at completed bounded sizes",
+      "samples": [
+        {
+          "N": 256,
+          "runtime_sec": 0.137680375,
+          "wall_sec": 0.7873370000161231,
+          "status": "completed",
+          "timeout_sec": 30,
+          "command": "target/debug/examples/rolling_linear logistic 256 target/linear-performance/logistic-256",
+          "slice_method": "deterministic causal synthetic daily rows",
+          "row_feature_evaluations": 5120,
+          "fold_workloads": [
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 10,
+                "iterations": 9,
+                "objective": 0.2102872099217539,
+                "projected_gradient_infinity_norm": 4.639592878056924e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 64
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 11,
+                "iterations": 10,
+                "objective": 0.208581712529518,
+                "projected_gradient_infinity_norm": 3.0766326958447943e-06,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 64
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 9,
+                "iterations": 8,
+                "objective": 0.21683979766211886,
+                "projected_gradient_infinity_norm": 8.471109916361803e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 64
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 10,
+                "iterations": 9,
+                "objective": 0.2277972283286049,
+                "projected_gradient_infinity_norm": 3.254594455940306e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 64
+            }
+          ],
+          "artifact_reload_exact": true
+        },
+        {
+          "N": 512,
+          "runtime_sec": 0.206865625,
+          "wall_sec": 0.2112670000642538,
+          "status": "completed",
+          "timeout_sec": 30,
+          "command": "target/debug/examples/rolling_linear logistic 512 target/linear-performance/logistic-512",
+          "slice_method": "deterministic causal synthetic daily rows",
+          "row_feature_evaluations": 11264,
+          "fold_workloads": [
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 11,
+                "iterations": 10,
+                "objective": 0.19518320179753196,
+                "projected_gradient_infinity_norm": 2.4091917180085742e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 128
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 11,
+                "iterations": 10,
+                "objective": 0.18978405029407525,
+                "projected_gradient_infinity_norm": 6.280595186494275e-06,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 128
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 11,
+                "iterations": 10,
+                "objective": 0.1913282852610497,
+                "projected_gradient_infinity_norm": 2.9212691992266254e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 128
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 11,
+                "iterations": 10,
+                "objective": 0.18133779020312812,
+                "projected_gradient_infinity_norm": 3.305331778207313e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 128
+            }
+          ],
+          "artifact_reload_exact": true
+        },
+        {
+          "N": 1024,
+          "runtime_sec": 0.404877584,
+          "wall_sec": 0.41075200005434453,
+          "status": "completed",
+          "timeout_sec": 30,
+          "command": "target/debug/examples/rolling_linear logistic 1024 target/linear-performance/logistic-1024",
+          "slice_method": "deterministic causal synthetic daily rows",
+          "row_feature_evaluations": 24064,
+          "fold_workloads": [
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 12,
+                "iterations": 10,
+                "objective": 0.15851788842640355,
+                "projected_gradient_infinity_norm": 7.851406544872805e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 256
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 12,
+                "iterations": 11,
+                "objective": 0.1670797735993001,
+                "projected_gradient_infinity_norm": 3.138697115015812e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 256
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 12,
+                "iterations": 10,
+                "objective": 0.17965639510686046,
+                "projected_gradient_infinity_norm": 8.45534461928095e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 256
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 11,
+                "iterations": 10,
+                "objective": 0.17294649348528024,
+                "projected_gradient_infinity_norm": 4.6576145851424684e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 256
+            }
+          ],
+          "artifact_reload_exact": true
+        }
+      ],
+      "scaling": {
+        "linear_estimate_sec": 0.809755168,
+        "power_law_p": 0.778081419309657,
+        "power_law_estimate_sec": 0.6643746607554385,
+        "local_slope_estimate_sec": 0.8009015020000001,
+        "observed_launch_overhead_max_sec": 0.6496566250161231,
+        "conservative_with_2x_internal_margin_sec": 2.269166961016123
+      },
+      "decision": "PASS",
+      "target_completed": {
+        "N": 2048,
+        "runtime_sec": 0.822365,
+        "wall_sec": 0.8314720001071692,
+        "status": "completed",
+        "timeout_sec": 30,
+        "command": "target/debug/examples/rolling_linear logistic 2048 target/linear-performance/logistic-2048",
+        "slice_method": "deterministic causal synthetic daily rows",
+        "row_feature_evaluations": 52224,
+        "fold_workloads": [
+          {
+            "features": 2,
+            "optimizer": {
+              "evaluations": 12,
+              "iterations": 10,
+              "objective": 0.1460310453439347,
+              "projected_gradient_infinity_norm": 8.008176048872502e-05,
+              "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+              "termination": "projected_gradient"
+            },
+            "training_rows": 512
+          },
+          {
+            "features": 2,
+            "optimizer": {
+              "evaluations": 13,
+              "iterations": 11,
+              "objective": 0.13262625725006114,
+              "projected_gradient_infinity_norm": 1.1709453822361139e-05,
+              "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+              "termination": "projected_gradient"
+            },
+            "training_rows": 512
+          },
+          {
+            "features": 2,
+            "optimizer": {
+              "evaluations": 13,
+              "iterations": 11,
+              "objective": 0.1408548178799415,
+              "projected_gradient_infinity_norm": 9.3365866491767e-06,
+              "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+              "termination": "projected_gradient"
+            },
+            "training_rows": 512
+          },
+          {
+            "features": 2,
+            "optimizer": {
+              "evaluations": 13,
+              "iterations": 12,
+              "objective": 0.15499555670041984,
+              "projected_gradient_infinity_norm": 2.475573319778905e-06,
+              "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+              "termination": "projected_gradient"
+            },
+            "training_rows": 512
+          }
+        ],
+        "artifact_reload_exact": true
+      }
+    },
+    {
+      "scope": "bounded synthetic debug integration only, not full BTC/ETH/SOL training",
+      "family": "huber",
+      "target": {
+        "N_full": 2048,
+        "T_budget_sec": 30.0,
+        "N_definition": "market rows, 4 rolling vintages x (N/4 training rows) x 2 features; variable optimizer evaluations reported per fold"
+      },
+      "program_type": "progress_observable",
+      "instrumentation_decision": "per-fit progress logs; subsecond internal runs sampled at completed bounded sizes",
+      "samples": [
+        {
+          "N": 256,
+          "runtime_sec": 0.103554584,
+          "wall_sec": 0.10660200007259846,
+          "status": "completed",
+          "timeout_sec": 30,
+          "command": "target/debug/examples/rolling_linear huber 256 target/linear-performance/huber-256",
+          "slice_method": "deterministic causal synthetic daily rows",
+          "row_feature_evaluations": 17920,
+          "fold_workloads": [
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 36,
+                "iterations": 20,
+                "objective": 0.537501074305771,
+                "projected_gradient_infinity_norm": 0.00022444467825766257,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 64
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 33,
+                "iterations": 19,
+                "objective": 0.6215563249674801,
+                "projected_gradient_infinity_norm": 2.885191086265948e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 64
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 32,
+                "iterations": 20,
+                "objective": 0.5560452615553734,
+                "projected_gradient_infinity_norm": 5.326222852986007e-06,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "projected_gradient"
+              },
+              "training_rows": 64
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 39,
+                "iterations": 22,
+                "objective": 0.48501904055283934,
+                "projected_gradient_infinity_norm": 2.5774775522317887e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 64
+            }
+          ],
+          "artifact_reload_exact": true
+        },
+        {
+          "N": 512,
+          "runtime_sec": 0.201781042,
+          "wall_sec": 0.20524200005456805,
+          "status": "completed",
+          "timeout_sec": 30,
+          "command": "target/debug/examples/rolling_linear huber 512 target/linear-performance/huber-512",
+          "slice_method": "deterministic causal synthetic daily rows",
+          "row_feature_evaluations": 37632,
+          "fold_workloads": [
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 32,
+                "iterations": 20,
+                "objective": 1.1443948278785696,
+                "projected_gradient_infinity_norm": 9.453000211395207e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 128
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 43,
+                "iterations": 23,
+                "objective": 1.1196010022015754,
+                "projected_gradient_infinity_norm": 0.00048227212087681437,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 128
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 39,
+                "iterations": 22,
+                "objective": 1.0943366405825503,
+                "projected_gradient_infinity_norm": 3.314057686770039e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 128
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 33,
+                "iterations": 20,
+                "objective": 1.1434442927824635,
+                "projected_gradient_infinity_norm": 0.0010819081549770931,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 128
+            }
+          ],
+          "artifact_reload_exact": true
+        },
+        {
+          "N": 1024,
+          "runtime_sec": 0.396929042,
+          "wall_sec": 0.4020470001269132,
+          "status": "completed",
+          "timeout_sec": 30,
+          "command": "target/debug/examples/rolling_linear huber 1024 target/linear-performance/huber-1024",
+          "slice_method": "deterministic causal synthetic daily rows",
+          "row_feature_evaluations": 65024,
+          "fold_workloads": [
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 33,
+                "iterations": 19,
+                "objective": 2.2436018497029298,
+                "projected_gradient_infinity_norm": 0.0006312071836721472,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 256
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 30,
+                "iterations": 18,
+                "objective": 2.303418467334386,
+                "projected_gradient_infinity_norm": 8.823285654546709e-05,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 256
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 30,
+                "iterations": 18,
+                "objective": 2.3125718740320873,
+                "projected_gradient_infinity_norm": 0.00016557203779023048,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 256
+            },
+            {
+              "features": 2,
+              "optimizer": {
+                "evaluations": 34,
+                "iterations": 19,
+                "objective": 2.2964450442380295,
+                "projected_gradient_infinity_norm": 0.001538267444580299,
+                "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+                "termination": "relative_function_reduction"
+              },
+              "training_rows": 256
+            }
+          ],
+          "artifact_reload_exact": true
+        }
+      ],
+      "scaling": {
+        "linear_estimate_sec": 0.793858084,
+        "power_law_p": 0.9692448527159566,
+        "power_law_estimate_sec": 0.7758856789392673,
+        "local_slope_estimate_sec": 0.787225042,
+        "observed_launch_overhead_max_sec": 0.00511795812691318,
+        "conservative_with_2x_internal_margin_sec": 1.5928341261269132
+      },
+      "decision": "PASS",
+      "target_completed": {
+        "N": 2048,
+        "runtime_sec": 0.806048167,
+        "wall_sec": 0.8144709998741746,
+        "status": "completed",
+        "timeout_sec": 30,
+        "command": "target/debug/examples/rolling_linear huber 2048 target/linear-performance/huber-2048",
+        "slice_method": "deterministic causal synthetic daily rows",
+        "row_feature_evaluations": 136192,
+        "fold_workloads": [
+          {
+            "features": 2,
+            "optimizer": {
+              "evaluations": 33,
+              "iterations": 19,
+              "objective": 4.5905641866241815,
+              "projected_gradient_infinity_norm": 0.0003952030043993475,
+              "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+              "termination": "relative_function_reduction"
+            },
+            "training_rows": 512
+          },
+          {
+            "features": 2,
+            "optimizer": {
+              "evaluations": 31,
+              "iterations": 18,
+              "objective": 4.531374858539051,
+              "projected_gradient_infinity_norm": 1.742120211217779e-05,
+              "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+              "termination": "relative_function_reduction"
+            },
+            "training_rows": 512
+          },
+          {
+            "features": 2,
+            "optimizer": {
+              "evaluations": 33,
+              "iterations": 19,
+              "objective": 4.575403906530028,
+              "projected_gradient_infinity_norm": 0.0011844698630616556,
+              "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+              "termination": "relative_function_reduction"
+            },
+            "training_rows": 512
+          },
+          {
+            "features": 2,
+            "optimizer": {
+              "evaluations": 36,
+              "iterations": 19,
+              "objective": 4.521308148734754,
+              "projected_gradient_infinity_norm": 0.0001714995026901857,
+              "solver_version": "lbfgsb-0.1.1/L-BFGS-B-C-3.0",
+              "termination": "relative_function_reduction"
+            },
+            "training_rows": 512
+          }
+        ],
+        "artifact_reload_exact": true
+      }
+    }
+  ],
+  "validation": {
+    "rustc": "1.93.0",
+    "cargo": "1.93.0",
+    "macos": "26.5.2",
+    "fmt": "PASS",
+    "workspace_all_features_clippy": "PASS",
+    "workspace_all_features_tests": {
+      "passed": 103,
+      "failed": 0,
+      "ignored_external_snapshot": 1
+    },
+    "workspace_default_tests": {
+      "passed": 86,
+      "failed": 0,
+      "ignored_external_snapshot": 1
+    },
+    "no_default_ml_tests": {
+      "passed": 19,
+      "failed": 0
+    },
+    "linear_only_ml_tests": {
+      "passed": 32,
+      "failed": 0
+    },
+    "existing_reference_helper_tests": 8,
+    "reference_fixture_regeneration": "byte-exact",
+    "example_families": [
+      "logistic",
+      "huber",
+      "xgboost",
+      "smartcore-linear"
+    ]
+  },
+  "binding_patch_semantic_gate": [
+    {
+      "family": "logistic",
+      "rule": "exact bytes, no rounding; identical models/reports/ledger before and after bindgen scope patch",
+      "result": "PASS",
+      "files": [
+        {
+          "file": "model-0.json",
+          "sha256": "3ce3e38327f8f8b2dca331dc82b11c399e584b10db2b585225b550df24d8edd3"
+        },
+        {
+          "file": "fold-0.json",
+          "sha256": "56ab636d023c7f997aaa490a12bec977989bdbcbfa2e75237cfbe5e500f5ee28"
+        },
+        {
+          "file": "model-1.json",
+          "sha256": "1d78b22aff85030d3d36e9ebf89c530632a4c45e449a09fd73ed5f88fff87dbb"
+        },
+        {
+          "file": "fold-1.json",
+          "sha256": "d0cb3ddac4ce22946ffb37f527ebbd2d8bea564ba898ca47229e6f72530056c2"
+        },
+        {
+          "file": "model-2.json",
+          "sha256": "d34fdba14a32e33453feadb885b45e59f361f02fb6996c482b358c0a64c85ba0"
+        },
+        {
+          "file": "fold-2.json",
+          "sha256": "cf0d030f51877bdbfa8f8757c11bcced2df1fb4a3002865a2ab6fd258923f897"
+        },
+        {
+          "file": "model-3.json",
+          "sha256": "febd744abc0202c26e1dba35f49cc1fc58f7a1d8e8eebd86dd80c8b203abf78c"
+        },
+        {
+          "file": "fold-3.json",
+          "sha256": "6eb61507e5ec64cc9f93076561da75ecb49ca6c4696315e4dfeb41b8d9944061"
+        },
+        {
+          "file": "ledger.json",
+          "sha256": "264461ccf55b60108e1bbbb4ebec4b306a7dbdbc48ce00ceeb041802fc2c4db1"
+        }
+      ]
+    },
+    {
+      "family": "huber",
+      "rule": "exact bytes, no rounding; identical models/reports/ledger before and after bindgen scope patch",
+      "result": "PASS",
+      "files": [
+        {
+          "file": "model-0.json",
+          "sha256": "07bc131d78b91729eb04c926df356c516cac0a013809aff55c9ad7e6f6fb280b"
+        },
+        {
+          "file": "fold-0.json",
+          "sha256": "a655dd2024f078ed99975eb08ed5b0ae4dcfb6f314be530d8a318774bcbf145a"
+        },
+        {
+          "file": "model-1.json",
+          "sha256": "c0c3dc4b69411c6d7753748907ae9a767e64c81a835fb37a13a457980e0674a2"
+        },
+        {
+          "file": "fold-1.json",
+          "sha256": "4bedaf6ca1a011cc91e85551e1ed4ff96668f6998994b05846d9a71c48b2fa3a"
+        },
+        {
+          "file": "model-2.json",
+          "sha256": "058af04b1200ad4c92707cf024da08787a6dea11a74d4f770970865f411c4077"
+        },
+        {
+          "file": "fold-2.json",
+          "sha256": "bd0a7e18c1ea9e912d1849e7714d194fd4ef9e3f3db4f911f3c762bd3e9594d0"
+        },
+        {
+          "file": "model-3.json",
+          "sha256": "05e2055c0fb0472730277fabb6a79e094f7a0cc30b3d09a16c6ce8ac9703593a"
+        },
+        {
+          "file": "fold-3.json",
+          "sha256": "87ea4e5618041b79edd0589e5a45f5dc6c90a09df58f6a0c97b654aa73785451"
+        },
+        {
+          "file": "ledger.json",
+          "sha256": "ac3e158dbd5b4461470f897fbbc917e3ff03d065f373b4e8de65d2f977e6c1da"
+        }
+      ]
+    }
+  ],
+  "binding_patch_target_rechecks": [
+    {
+      "family": "logistic",
+      "market_rows": 2048,
+      "elapsed_sec": 0.848988584,
+      "before_after_models_reports_ledger": "byte-exact",
+      "artifact_reload_decisions_and_ledger_exact": true
+    },
+    {
+      "family": "huber",
+      "market_rows": 2048,
+      "elapsed_sec": 0.811699292,
+      "before_after_models_reports_ledger": "byte-exact",
+      "artifact_reload_decisions_and_ledger_exact": true
+    }
+  ]
+}

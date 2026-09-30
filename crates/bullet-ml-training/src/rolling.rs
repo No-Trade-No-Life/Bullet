@@ -193,6 +193,19 @@ impl ArtifactModel for bullet_ml::LinearModel {
     }
 }
 
+impl ArtifactModel for bullet_ml::LogisticRegressionModel {
+    fn artifact_sha256(&self) -> Result<String, TrainingError> {
+        self.validate().map_err(|e| TrainingError(e.to_string()))?;
+        hash(self)
+    }
+}
+impl ArtifactModel for bullet_ml::HuberRegressionModel {
+    fn artifact_sha256(&self) -> Result<String, TrainingError> {
+        self.validate().map_err(|e| TrainingError(e.to_string()))?;
+        hash(self)
+    }
+}
+
 pub trait RollingTrainer {
     type Model: ArtifactModel;
     fn fit(&mut self, batch: &FitBatch<'_>) -> Result<(Self::Model, FitReceipt), TrainingError>;

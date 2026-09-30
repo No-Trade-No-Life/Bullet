@@ -19,6 +19,14 @@ jobs:
         with:
           components: clippy
       - run: sudo apt-get update && sudo apt-get install --yes libclang-dev unzip
+      - run: cd vendor/lbfgsb && sha256sum --check SHA256SUMS
+      - name: Linear-only backend without XGBoost provisioning
+        run: |
+          cargo clippy -p bullet-ml-training --no-default-features --features linear-backend --all-targets --locked -- -D warnings
+          cargo test -p bullet-ml -p bullet-ml-training --no-default-features --features linear-backend --locked
+          cargo build -p bullet-ml-training --no-default-features --features linear-backend --example rolling_linear --locked
+          timeout 30s target/debug/examples/rolling_linear logistic 128 target/linear-logistic-evidence
+          timeout 30s target/debug/examples/rolling_linear huber 128 target/linear-huber-evidence
       - run: scripts/prepare-xgboost.sh
       - run: cargo --config target/native/xgboost-3.2.0/cargo.toml clippy -p bullet-ml-training --all-targets --all-features --locked -- -D warnings
       - run: cargo --config target/native/xgboost-3.2.0/cargo.toml test -p bullet-ml -p bullet-ml-training --all-features --locked --no-run
@@ -37,5 +45,7 @@ jobs:
           name: native-ml-evidence-${{ matrix.runner }}
           path: |
             target/native-oos-evidence/
+            target/linear-logistic-evidence/
+            target/linear-huber-evidence/
             target/native/xgboost-3.2.0/native-provenance.txt
           if-no-files-found: error

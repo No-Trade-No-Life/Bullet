@@ -1,0 +1,82 @@
+{
+  "crate": "lbfgsb",
+  "version": "0.1.1",
+  "upstream_archive_sha256": "70b0d1a3440f0ad7ec488c97ccd03e1d76f0114342be1a5fa17442b0b25e075f",
+  "scope": "retained upstream build inputs; omitted unrelated Matlab/prebuilt examples",
+  "upstream_files": [
+    {
+      "path": "Cargo.toml",
+      "sha256": "fa0e40c814c54d4f9df4e6645a407e9c977de2a72b14eb672c3d32d1f1cc3e0a"
+    },
+    {
+      "path": "build.rs",
+      "sha256": "ebf10ce527a51b55a1d5439413677c53968491ebfeb614daf1b5b1e42826d4d2"
+    },
+    {
+      "path": "README.md",
+      "sha256": "04dc0f307ba3fbaa7a783233eccf56aa2c5dfe51c416286f63e72443f248658c"
+    },
+    {
+      "path": "LICENSE",
+      "sha256": "694a0a622be818f0b32c39fba4884ed69050da21d9f8c10dcea9dd9a78d70e07"
+    },
+    {
+      "path": "src/lib.rs",
+      "sha256": "0859b8ce0935563b529e0bf96baff51a68dc4b904f5c2cb907f313a80b1ebb21"
+    },
+    {
+      "path": "src/lbfgsb.rs",
+      "sha256": "3d4d80a096374475980f76e6f97ca8b972812efbd892a2d835c9cd07da0c5db3"
+    },
+    {
+      "path": "tests/driver1.rs",
+      "sha256": "5388a97e48634b6013d938e015d62e284adaca8125a8b312ccf3bdc430f2994f"
+    },
+    {
+      "path": "lib/LICENSE",
+      "sha256": "694a0a622be818f0b32c39fba4884ed69050da21d9f8c10dcea9dd9a78d70e07"
+    },
+    {
+      "path": "lib/VERSION",
+      "sha256": "f7e01a61d0484281d2ae4bd514f4d938d0199006c7b7c1a34b3a99baa5e68a16"
+    },
+    {
+      "path": "lib/README.md",
+      "sha256": "8bdb8e45dca4e99d08d5e54dd23103d0486310dbb0a91027fa4c636c84d781cc"
+    },
+    {
+      "path": "lib/src/lbfgsb.h",
+      "sha256": "329e80c78b26aa728e06f8f316a242d6a09a9e4fc9d0d50713bb8c57e54d52e8"
+    },
+    {
+      "path": "lib/src/lbfgsb.c",
+      "sha256": "b36123c7f11d5b6893ffb1d5e2d7d1f31ecd8f1e97323607918a48f50b074ed8"
+    },
+    {
+      "path": "lib/src/linesearch.c",
+      "sha256": "09e874480effb51330944e517676fa704460b5c601e52b0324f0bf2e740afc9d"
+    },
+    {
+      "path": "lib/src/subalgorithms.c",
+      "sha256": "553024a0c35c54b3b7585f1f724b82aabd1d4c011cfd8fd6e723b8795339682e"
+    },
+    {
+      "path": "lib/src/print.c",
+      "sha256": "95a35a14e8505e4cd7e8e956b68ba74e94c9f5f9eb9e6b4f5b2756f21c8c24a7"
+    },
+    {
+      "path": "lib/src/linpack.c",
+      "sha256": "aabf79c0ff278513d9a3851ec28b1c3ead7e8fdc6bd9714ba8849573a6652e1d"
+    },
+    {
+      "path": "lib/src/miniCBLAS.c",
+      "sha256": "69742c43f018fdd8a9a91025dbd1c93cdf121efebbc79c56a95ab2768da75989"
+    },
+    {
+      "path": "lib/src/timer.c",
+      "sha256": "ce8bb510886f9096b0fc8d1f972cb3596460349c6fed1f14d696a1e409c12091"
+    }
+  ],
+  "build_patch": "allowlist_file(r\".*/lbfgsb\\.h\"); no numerical source changes",
+  "patched_build_sha256": "3770888fdd4701a428b57271616bab31dd31d2ffee07973cdcf64b33f0254ba1"
+}
