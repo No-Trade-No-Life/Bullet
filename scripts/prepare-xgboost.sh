@@ -46,12 +46,18 @@ if [ "$library" = libxgboost.dylib ]; then
   install_name_tool -change @rpath/libomp.dylib "$omp" "$destination/xgboost/lib/libxgboost.dylib"
   codesign --force --sign - "$destination/xgboost/lib/libxgboost.dylib"
 fi
+# Cargo injects target/deps into LD_LIBRARY_PATH during tests. DT_RPATH on
+# Linux must take precedence over any older wrapper-supplied libxgboost there.
+rpath="-Wl,-rpath,$destination/xgboost/lib"
+if [ "$library" = libxgboost.so ]; then
+  rpath="-Wl,--disable-new-dtags,-rpath,$destination/xgboost/lib"
+fi
 # Cargo build configuration only. Applications do not read environment variables.
 cat > "$destination/cargo.toml" <<CONFIG
 [env]
 XGBOOST_LIB_DIR = { value = "$destination/xgboost/lib", force = true }
 [build]
-rustflags = ["-Lnative=$destination/xgboost/lib", "-Clink-arg=-Wl,-rpath,$destination/xgboost/lib"]
+rustflags = ["-Lnative=$destination/xgboost/lib", "-Clink-arg=$rpath"]
 CONFIG
 printf '\nNative XGBoost ready. Cargo config: %s/cargo.toml\n' "$destination"
 

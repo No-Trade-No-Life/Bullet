@@ -105,7 +105,10 @@
     "power_law_p": 0.7286943274141839,
     "power_law_estimate_sec": 0.6921923920244014,
     "local_slope_estimate_sec": 0.850209836,
-    "conservative_estimate_sec": 2.621762004
+    "conservative_estimate_sec": 2.621762004,
+    "observed_process_overhead_allowance_sec": 1.135401667,
+    "conservative_wall_estimate_sec": 3.757163671,
+    "timing_notes": "Scaling fits use the monotonic internal timed region. Observed subprocess wall times are recorded separately; first-run overhead outside that region is added conservatively. Every process also has a hard 30-second timeout."
   },
   "full": {
     "artifact_reload_decisions_and_ledger_exact": true,

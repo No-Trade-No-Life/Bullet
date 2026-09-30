@@ -60,6 +60,10 @@ CPU distribution; macOS uses the official ARM64 distribution and system
 Homebrew OpenMP. Both macOS dependency edges resolve to the same OpenMP image;
 loading separate copies is unsafe. An XGBoost license is retained separately.
 
+On Linux the generated linker configuration uses `DT_RPATH` so Cargo's test-time
+`LD_LIBRARY_PATH` cannot substitute an older wrapper-provided XGBoost binary.
+The linked version is still independently verified by the backend.
+
 The generated Cargo config supplies the wrapper's required **build-time**
 `XGBOOST_LIB_DIR` and linker search/rpath. Bullet applications have no runtime
 environment-variable configuration. The native path is local to this checkout;
