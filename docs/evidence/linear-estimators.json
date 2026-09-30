@@ -13,7 +13,65 @@
     "coefficient_atol": 1.0e-05,
     "prediction_atol": 2.0e-05,
     "scale_atol": 1.0e-05,
-    "result": "PASS"
+    "result": "PASS",
+    "per_case_observed_errors": [
+      {
+        "case": "logistic-intercept-True-weighted-True",
+        "coefficient_max_abs_error": 1.871242621964697e-08,
+        "intercept_abs_error": 1.0007193018690685e-08,
+        "prediction_max_abs_error": 8.893089487038708e-09,
+        "scale_abs_error": null
+      },
+      {
+        "case": "logistic-intercept-True-weighted-False",
+        "coefficient_max_abs_error": 3.442085322324928e-08,
+        "intercept_abs_error": 1.5634513808593375e-08,
+        "prediction_max_abs_error": 1.3767780249196448e-08,
+        "scale_abs_error": null
+      },
+      {
+        "case": "logistic-intercept-False-weighted-True",
+        "coefficient_max_abs_error": 1.4392229380488786e-08,
+        "intercept_abs_error": 0.0,
+        "prediction_max_abs_error": 4.300943878821073e-09,
+        "scale_abs_error": null
+      },
+      {
+        "case": "logistic-intercept-False-weighted-False",
+        "coefficient_max_abs_error": 1.8041124150158794e-16,
+        "intercept_abs_error": 0.0,
+        "prediction_max_abs_error": 1.1102230246251565e-16,
+        "scale_abs_error": null
+      },
+      {
+        "case": "huber-intercept-True-weighted-True",
+        "coefficient_max_abs_error": 2.7755575615628914e-16,
+        "intercept_abs_error": 4.440892098500626e-16,
+        "prediction_max_abs_error": 1.7763568394002505e-15,
+        "scale_abs_error": 1.1102230246251565e-16
+      },
+      {
+        "case": "huber-intercept-True-weighted-False",
+        "coefficient_max_abs_error": 1.1102230246251565e-16,
+        "intercept_abs_error": 4.440892098500626e-16,
+        "prediction_max_abs_error": 8.881784197001252e-16,
+        "scale_abs_error": 5.551115123125783e-17
+      },
+      {
+        "case": "huber-intercept-False-weighted-True",
+        "coefficient_max_abs_error": 2.220446049250313e-16,
+        "intercept_abs_error": 0.0,
+        "prediction_max_abs_error": 8.881784197001252e-16,
+        "scale_abs_error": 2.220446049250313e-16
+      },
+      {
+        "case": "huber-intercept-False-weighted-False",
+        "coefficient_max_abs_error": 6.661338147750939e-16,
+        "intercept_abs_error": 0.0,
+        "prediction_max_abs_error": 1.7763568394002505e-15,
+        "scale_abs_error": 2.220446049250313e-16
+      }
+    ]
   },
   "solver_crate": {
     "name": "lbfgsb",
@@ -553,5 +611,38 @@
         "artifact_reload_exact": true
       }
     }
-  ]
+  ],
+  "validation": {
+    "rustc": "1.93.0",
+    "cargo": "1.93.0",
+    "macos": "26.5.2",
+    "fmt": "PASS",
+    "workspace_all_features_clippy": "PASS",
+    "workspace_all_features_tests": {
+      "passed": 103,
+      "failed": 0,
+      "ignored_external_snapshot": 1
+    },
+    "workspace_default_tests": {
+      "passed": 86,
+      "failed": 0,
+      "ignored_external_snapshot": 1
+    },
+    "no_default_ml_tests": {
+      "passed": 19,
+      "failed": 0
+    },
+    "linear_only_ml_tests": {
+      "passed": 32,
+      "failed": 0
+    },
+    "existing_reference_helper_tests": 8,
+    "reference_fixture_regeneration": "byte-exact",
+    "example_families": [
+      "logistic",
+      "huber",
+      "xgboost",
+      "smartcore-linear"
+    ]
+  }
 }
