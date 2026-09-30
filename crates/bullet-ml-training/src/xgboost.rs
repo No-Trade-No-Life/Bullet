@@ -94,6 +94,8 @@ impl XgboostConfig {
             ("tree_method", "hist".into()),
             ("verbosity", "0".into()),
             ("validate_parameters", "1".into()),
+            // Override the wrapper's fixed 0.5 initialization explicitly.
+            ("boost_from_average", "1".into()),
             ("max_depth", self.max_depth.to_string()),
             ("eta", self.learning_rate.to_string()),
             ("min_child_weight", self.min_child_weight.to_string()),
@@ -313,7 +315,7 @@ impl RollingTrainer for XgboostTrainer {
         let receipt = FitReceipt {
             backend: "xgboost-cpu-hist".into(),
             backend_version: "3.2.0".into(),
-            parameters: json!({"config": self.config, "native_parameters": self.config.parameters(), "wrapper_version": WRAPPER_VERSION, "matrix_dtype": "float32"}),
+            parameters: json!({"config": self.config, "native_parameters": self.config.parameters(), "wrapper_version": WRAPPER_VERSION, "matrix_dtype": "float32", "initial_intercept": "estimated_from_training_data"}),
             model_sha256: artifact_sha256.clone(),
         };
         Ok((

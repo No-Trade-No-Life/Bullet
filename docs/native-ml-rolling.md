@@ -194,3 +194,21 @@ outside Bullet's evaluator and training core.
 Primary dependencies: [community wrapper](https://docs.rs/xgb/3.0.6/xgb/),
 [XGBoost C API](https://xgboost.readthedocs.io/en/stable/c.html), and
 [native model format](https://xgboost.readthedocs.io/en/stable/tutorials/saving_model.html).
+
+## Explicit initial-intercept semantics
+
+Fresh fits explicitly set native `boost_from_average=1`: XGBoost 3.2 estimates
+the initial intercept from the selected training labels and weights for both
+binary classification and squared-error regression. `FitReceipt` records this
+policy and the native parameter. This overrides `xgb 3.0.6`'s implicit fixed
+`base_score=0.5`, which otherwise disables the native estimation and can change
+model directions even when all other supplied hyperparameters match sklearn.
+
+This is a training-semantic correction, not a numerical tolerance relaxation.
+Existing saved model artifacts still load their original fitted intercept; they
+are not silently rewritten or retrained. Earlier benchmark hashes remain
+historical evidence for their original implementation, not golden hashes for
+newly trained models. An independent pinned sklearn/XGBoost 3.2.0 fixture tests
+unbalanced classification, nonzero-mean regression and nonuniform weights with
+exact per-element predictions. Its optional generator is
+`scripts/reference_xgboost_intercept.py`; CI only consumes the committed JSON.
